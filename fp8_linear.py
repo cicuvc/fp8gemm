@@ -7,31 +7,112 @@ from torch import nn
 import mxtest
 
 
-class _FP8LinearFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, master_weight, weight_fp8, weight_scale, bias):
-        out = mxtest.launch_fp8gemm(x, weight_fp8, weight_scale, bias)
+@torch.library.custom_op("fp8gemm::linear_fwd", mutates_args=())
+def _fp8_linear_fwd(
+    x: torch.Tensor,
+    master_weight: torch.Tensor,
+    weight_fp8: torch.Tensor,
+    weight_scale: torch.Tensor,
+    bias: torch.Tensor | None,
+) -> torch.Tensor:
+    return mxtest.launch_fp8gemm(x, weight_fp8, weight_scale, bias)
 
-        ctx.save_for_backward(x, weight_fp8, weight_scale)
-        ctx.has_bias = bias is not None
-        return out
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        x, weight_fp8, weight_scale = ctx.saved_tensors
-        grad_output = grad_output.contiguous()
-        if grad_output.dtype != torch.bfloat16:
-            grad_output = grad_output.to(torch.bfloat16)
+@_fp8_linear_fwd.register_fake
+def _fp8_linear_fwd_fake(
+    x: torch.Tensor,
+    master_weight: torch.Tensor,
+    weight_fp8: torch.Tensor,
+    weight_scale: torch.Tensor,
+    bias: torch.Tensor | None,
+) -> torch.Tensor:
+    return torch.empty(
+        (x.shape[0], master_weight.shape[0]),
+        dtype=torch.bfloat16,
+        device=x.device,
+    )
 
-        grad_x = mxtest.launch_fp8gemm_backward(grad_output, weight_fp8, weight_scale)
-        grad_weight = mxtest.launch_fp8gemm_weight_grad(
-            grad_output,
-            x,
-            out_dtype=torch.float32,
-        )
-        grad_bias = grad_output.float().sum(dim=0) if ctx.has_bias else None
 
-        return grad_x, grad_weight, None, None, grad_bias
+@torch.library.custom_op("fp8gemm::linear_bwd", mutates_args=())
+def _fp8_linear_bwd(
+    grad_output: torch.Tensor,
+    x: torch.Tensor,
+    weight_fp8: torch.Tensor,
+    weight_scale: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    grad_output = grad_output.contiguous()
+    if grad_output.dtype != torch.bfloat16:
+        grad_output = grad_output.to(torch.bfloat16)
+
+    grad_x = mxtest.launch_fp8gemm_backward(
+        grad_output,
+        weight_fp8,
+        weight_scale,
+    )
+    grad_weight = mxtest.launch_fp8gemm_weight_grad(
+        grad_output,
+        x,
+        out_dtype=torch.float32,
+    )
+    grad_bias = grad_output.float().sum(dim=0)
+    return grad_x, grad_weight, grad_bias
+
+
+@_fp8_linear_bwd.register_fake
+def _fp8_linear_bwd_fake(
+    grad_output: torch.Tensor,
+    x: torch.Tensor,
+    weight_fp8: torch.Tensor,
+    weight_scale: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    out_features, in_features = weight_fp8.shape
+    return (
+        torch.empty(
+            (x.shape[0], in_features),
+            dtype=torch.bfloat16,
+            device=x.device,
+        ),
+        torch.empty(
+            (out_features, in_features),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+        torch.empty(
+            (out_features,),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+    )
+
+
+def _fp8_linear_setup_context(ctx, inputs, output):
+    x, _, weight_fp8, weight_scale, bias = inputs
+    ctx.save_for_backward(x, weight_fp8, weight_scale)
+    ctx.has_bias = bias is not None
+
+
+def _fp8_linear_backward(ctx, grad_output):
+    x, weight_fp8, weight_scale = ctx.saved_tensors
+    grad_x, grad_weight, grad_bias = _fp8_linear_bwd(
+        grad_output,
+        x,
+        weight_fp8,
+        weight_scale,
+    )
+    return (
+        grad_x,
+        grad_weight,
+        None,
+        None,
+        grad_bias if ctx.has_bias else None,
+    )
+
+
+torch.library.register_autograd(
+    _fp8_linear_fwd,
+    _fp8_linear_backward,
+    setup_context=_fp8_linear_setup_context,
+)
 
 
 class FP8Linear(nn.Module):
@@ -41,7 +122,10 @@ class FP8Linear(nn.Module):
     one E8M0 scale per 32x32 block. The weight gradient is accumulated in FP32.
     Standard in-place parameter updates are detected lazily before forward or
     quantized-weight access. Call ``mark_fp8_dirty`` for writes that bypass the
-    parameter version counter, such as direct ``.data`` mutation.
+    parameter version counter, such as direct ``.data`` mutation. When using
+    ``torch.compile``, synchronize after optimizer steps with
+    ``step_fp8_optimizers`` or ``bind_fp8_optimizer``; version checks are
+    skipped inside the compiled graph.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None):
@@ -96,6 +180,8 @@ class FP8Linear(nn.Module):
         return self
 
     def _sync_if_needed(self):
+        if torch.compiler.is_compiling():
+            return
         if self._fp8_dirty or self._synced_version != self.master_weight._version:
             self.refresh_fp8_weight()
 
@@ -129,7 +215,7 @@ class FP8Linear(nn.Module):
 
         x = x.contiguous()
         weight_fp8, weight_scale = self.quantized_weight
-        return _FP8LinearFunction.apply(
+        return _fp8_linear_fwd(
             x,
             self.master_weight,
             weight_fp8,

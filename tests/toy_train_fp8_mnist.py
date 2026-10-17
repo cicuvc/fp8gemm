@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from fp8_linear import FP8Linear, step_fp8_optimizers
+from fp8_linear import FP8Linear, iter_fp8_modules, step_fp8_optimizers
 from tests.toy_train_fp8_mlp import FP32Linear
 
 
@@ -129,6 +129,11 @@ def parse_args() -> argparse.Namespace:
         help="shape-dependent Muon learning-rate adjustment",
     )
     parser.add_argument("--weight-decay", type=float, default=1e-2)
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="wrap both MLPs with torch.compile(fullgraph=True)",
+    )
     parser.add_argument("--log-every", type=int, default=100)
     return parser.parse_args()
 
@@ -319,10 +324,10 @@ def compare_gradients(
 
 
 def quantized_snapshots(
-    model: FP8MNISTMLP,
+    model: nn.Module,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     snapshots = {}
-    for name, layer in zip(("fc1", "fc2", "fc3"), model.fp8_layers()):
+    for name, layer in zip(("fc1", "fc2", "fc3"), iter_fp8_modules(model)):
         weight_fp8, weight_scale = layer.quantized_weight
         snapshots[name] = (weight_fp8.clone(), weight_scale.clone())
     return snapshots
@@ -478,6 +483,7 @@ def main() -> None:
         f"shape=(M={train_x.shape[0]}, K={train_x.shape[1]}, "
         f"H1={args.hidden1}, H2={args.hidden2}, N=10)",
         f"optimizer={args.optimizer}",
+        f"compile={args.compile}",
         f"batch_size={args.batch_size}",
         f"device={torch.cuda.get_device_name(device)}",
     )
@@ -494,6 +500,9 @@ def main() -> None:
 
     fp8_optimizers = make_optimizers(fp8_model, args)
     control_optimizers = make_optimizers(control, args)
+    if args.compile:
+        fp8_model = torch.compile(fp8_model, fullgraph=True)
+        control = torch.compile(control, fullgraph=True)
 
     refresh_counts = train_models(
         fp8_model,

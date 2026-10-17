@@ -7,74 +7,108 @@ import mxtest
 from fp8_linear import FP8Linear, bind_fp8_optimizer
 
 
-class _FP8SwiGLUFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
+@torch.library.custom_op("fp8gemm::swiglu_fwd", mutates_args=())
+def _fp8_swiglu_fwd(
+    x: torch.Tensor,
+    gate_master: torch.Tensor,
+    up_master: torch.Tensor,
+    down_master: torch.Tensor,
+    gate_fp8: torch.Tensor,
+    gate_scale: torch.Tensor,
+    up_fp8: torch.Tensor,
+    up_scale: torch.Tensor,
+    down_fp8: torch.Tensor,
+    down_scale: torch.Tensor,
+    bias: torch.Tensor | None,
+    use_fp8_wgrad: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    gate = torch.empty(
+        (x.shape[0], gate_fp8.shape[0]),
+        dtype=torch.bfloat16,
+        device=x.device,
+    )
+    up = torch.empty_like(gate)
+    hidden = mxtest.launch_fp8_swiglu(
         x,
-        gate_master,
-        up_master,
-        down_master,
         gate_fp8,
         gate_scale,
         up_fp8,
         up_scale,
-        down_fp8,
-        down_scale,
-        bias,
-        use_fp8_wgrad,
-    ):
-        gate = torch.empty(
-            (x.shape[0], gate_fp8.shape[0]),
+        gate,
+        up,
+    )
+    out = mxtest.launch_fp8gemm(hidden, down_fp8, down_scale, bias)
+    return out, gate, up, hidden
+
+
+@_fp8_swiglu_fwd.register_fake
+def _fp8_swiglu_fwd_fake(
+    x: torch.Tensor,
+    gate_master: torch.Tensor,
+    up_master: torch.Tensor,
+    down_master: torch.Tensor,
+    gate_fp8: torch.Tensor,
+    gate_scale: torch.Tensor,
+    up_fp8: torch.Tensor,
+    up_scale: torch.Tensor,
+    down_fp8: torch.Tensor,
+    down_scale: torch.Tensor,
+    bias: torch.Tensor | None,
+    use_fp8_wgrad: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    hidden_features = gate_fp8.shape[0]
+    out_features = down_master.shape[0]
+    return (
+        torch.empty(
+            (x.shape[0], out_features),
             dtype=torch.bfloat16,
             device=x.device,
-        )
-        up = torch.empty_like(gate)
-        hidden = mxtest.launch_fp8_swiglu(
-            x,
-            gate_fp8,
-            gate_scale,
-            up_fp8,
-            up_scale,
-            gate,
-            up,
-        )
-        out = mxtest.launch_fp8gemm(hidden, down_fp8, down_scale, bias)
-        ctx.save_for_backward(
-            x,
-            gate,
-            up,
-            hidden,
-            gate_fp8,
-            gate_scale,
-            up_fp8,
-            up_scale,
-            down_fp8,
-            down_scale,
-        )
-        ctx.has_bias = bias is not None
-        ctx.use_fp8_wgrad = use_fp8_wgrad
-        return out
+        ),
+        torch.empty(
+            (x.shape[0], hidden_features),
+            dtype=torch.bfloat16,
+            device=x.device,
+        ),
+        torch.empty(
+            (x.shape[0], hidden_features),
+            dtype=torch.bfloat16,
+            device=x.device,
+        ),
+        torch.empty(
+            (x.shape[0], hidden_features),
+            dtype=torch.bfloat16,
+            device=x.device,
+        ),
+    )
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        (
-            x,
-            gate,
-            up,
-            hidden,
-            gate_fp8,
-            gate_scale,
-            up_fp8,
-            up_scale,
-            down_fp8,
-            down_scale,
-        ) = ctx.saved_tensors
-        grad_output = grad_output.contiguous()
-        if grad_output.dtype != torch.bfloat16:
-            grad_output = grad_output.to(torch.bfloat16)
 
-        grad_x, grad_gate, grad_up, grad_down = mxtest.launch_fp8_down_swiglu_backward(
+@torch.library.custom_op("fp8gemm::swiglu_bwd", mutates_args=())
+def _fp8_swiglu_bwd(
+    grad_output: torch.Tensor,
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    up: torch.Tensor,
+    hidden: torch.Tensor,
+    gate_fp8: torch.Tensor,
+    gate_scale: torch.Tensor,
+    up_fp8: torch.Tensor,
+    up_scale: torch.Tensor,
+    down_fp8: torch.Tensor,
+    down_scale: torch.Tensor,
+    use_fp8_wgrad: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    grad_output = grad_output.contiguous()
+    if grad_output.dtype != torch.bfloat16:
+        grad_output = grad_output.to(torch.bfloat16)
+
+    grad_x, grad_gate, grad_up, grad_down = (
+        mxtest.launch_fp8_down_swiglu_backward(
             grad_output,
             hidden,
             gate,
@@ -86,23 +120,146 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
             up_fp8,
             up_scale,
             x,
-            use_fp8_wgrad=ctx.use_fp8_wgrad,
+            use_fp8_wgrad=use_fp8_wgrad,
         )
-        grad_bias = grad_output.float().sum(dim=0) if ctx.has_bias else None
-        return (
-            grad_x,
-            grad_gate,
-            grad_up,
-            grad_down,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            grad_bias,
-            None,
-        )
+    )
+    grad_bias = grad_output.float().sum(dim=0)
+    return grad_x, grad_gate, grad_up, grad_down, grad_bias
+
+
+@_fp8_swiglu_bwd.register_fake
+def _fp8_swiglu_bwd_fake(
+    grad_output: torch.Tensor,
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    up: torch.Tensor,
+    hidden: torch.Tensor,
+    gate_fp8: torch.Tensor,
+    gate_scale: torch.Tensor,
+    up_fp8: torch.Tensor,
+    up_scale: torch.Tensor,
+    down_fp8: torch.Tensor,
+    down_scale: torch.Tensor,
+    use_fp8_wgrad: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    hidden_features, in_features = gate_fp8.shape
+    out_features = down_fp8.shape[0]
+    return (
+        torch.empty(
+            (x.shape[0], in_features),
+            dtype=torch.bfloat16,
+            device=x.device,
+        ),
+        torch.empty(
+            (hidden_features, in_features),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+        torch.empty(
+            (hidden_features, in_features),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+        torch.empty(
+            (out_features, hidden_features),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+        torch.empty(
+            (out_features,),
+            dtype=torch.float32,
+            device=x.device,
+        ),
+    )
+
+
+def _fp8_swiglu_setup_context(ctx, inputs, output):
+    (
+        x,
+        _,
+        _,
+        _,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        down_fp8,
+        down_scale,
+        bias,
+        use_fp8_wgrad,
+    ) = inputs
+    _, gate, up, hidden = output
+    ctx.save_for_backward(
+        x,
+        gate,
+        up,
+        hidden,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        down_fp8,
+        down_scale,
+    )
+    ctx.has_bias = bias is not None
+    ctx.use_fp8_wgrad = use_fp8_wgrad
+
+
+def _fp8_swiglu_backward(ctx, *grad_outputs):
+    grad_output = grad_outputs[0]
+    (
+        x,
+        gate,
+        up,
+        hidden,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        down_fp8,
+        down_scale,
+    ) = ctx.saved_tensors
+    grad_x, grad_gate, grad_up, grad_down, grad_bias = _fp8_swiglu_bwd(
+        grad_output,
+        x,
+        gate,
+        up,
+        hidden,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        down_fp8,
+        down_scale,
+        ctx.use_fp8_wgrad,
+    )
+    return (
+        grad_x,
+        grad_gate,
+        grad_up,
+        grad_down,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        grad_bias if ctx.has_bias else None,
+        None,
+    )
+
+
+torch.library.register_autograd(
+    _fp8_swiglu_fwd,
+    _fp8_swiglu_backward,
+    setup_context=_fp8_swiglu_setup_context,
+)
 
 
 class FP8SwiGLU(nn.Module):
@@ -113,7 +270,9 @@ class FP8SwiGLU(nn.Module):
     default to BF16 inputs with FP32 accumulation/output for better transpose
     GEMM throughput; set ``fp8_wgrad=True`` to force the FP8 weight-gradient
     kernels. Parameter updates are synchronized lazily before forward or when
-    a quantized-weight property is accessed.
+    a quantized-weight property is accessed. Inside ``torch.compile``, refresh
+    after optimizer steps with ``step_fp8_optimizers`` or
+    ``bind_fp8_optimizer`` because version checks are skipped in the graph.
     """
 
     def __init__(
@@ -201,6 +360,8 @@ class FP8SwiGLU(nn.Module):
         return self
 
     def _sync_if_needed(self):
+        if torch.compiler.is_compiling():
+            return
         versions = (
             self.gate_weight._version,
             self.up_weight._version,
@@ -246,7 +407,7 @@ class FP8SwiGLU(nn.Module):
         gate_fp8, gate_scale = self.quantized_gate_weight
         up_fp8, up_scale = self.quantized_up_weight
         down_fp8, down_scale = self.quantized_down_weight
-        return _FP8SwiGLUFunction.apply(
+        out, _, _, _ = _fp8_swiglu_fwd(
             x,
             self.gate_weight,
             self.up_weight,
@@ -260,6 +421,7 @@ class FP8SwiGLU(nn.Module):
             self.down_proj.bias,
             self.fp8_wgrad,
         )
+        return out
 
     def extra_repr(self):
         return (
