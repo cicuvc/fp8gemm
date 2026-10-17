@@ -150,6 +150,41 @@ def fp8gemm_bwd(dy_input, weight, weight_scale, out, M, N, K, dy_stride1, w_stri
 
 
 @triton.jit
+def fp8gemm_wgrad(dy_input, x_input, weight_grad, M, N, K, dy_stride1, x_stride1, dw_stride1, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    # dY: [M, N], X: [M, K], dW: [N, K]
+    # Both inputs are quantized online with one scale per 32 contraction
+    # elements along M.
+    MX_BLOCK: tl.constexpr = 32
+
+    NUM_NBLOCKS = tl.cdiv(N, BLOCK_N)
+    NUM_KBLOCKS = tl.cdiv(K, BLOCK_K)
+
+    pid = tl.program_id(0)
+    row_idx = pid // NUM_KBLOCKS
+    col_idx = pid % NUM_KBLOCKS
+
+    dy_block_ptr = tl.make_block_ptr(dy_input, shape=(M,N), strides=(dy_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    x_block_ptr = tl.make_block_ptr(x_input, shape=(M,K), strides=(x_stride1, 1), offsets=(0, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+
+    acc = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    for i in tl.range(0, M, BLOCK_M):
+        dy_block = tl.load(dy_block_ptr, boundary_check=(1,0), padding_option='zero')
+        dy_block_scaled, dys_block = online_scale(tl.trans(dy_block))
+
+        x_block = tl.load(x_block_ptr, boundary_check=(1,0), padding_option='zero')
+        x_block_scaled, xs_block = online_scale(tl.trans(x_block))
+        x_block_scaled = tl.trans(x_block_scaled)
+
+        acc = tl.dot_scaled(dy_block_scaled, dys_block, 'e4m3', x_block_scaled, xs_block, 'e4m3', acc)
+
+        dy_block_ptr = tl.advance(dy_block_ptr, (BLOCK_M, 0))
+        x_block_ptr = tl.advance(x_block_ptr, (BLOCK_M, 0))
+
+    o_block_ptr = tl.make_block_ptr(weight_grad, shape=(N,K), strides=(dw_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    tl.store(o_block_ptr, acc.to(weight_grad.dtype.element_ty), boundary_check=(1,0))
+
+
+@triton.jit
 def fp8_row_quantize(weight, weight_out, weight_scale, N, K, w_stride1, wo_stride1, ws_stride1, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
     pid = tl.program_id(0)
 
@@ -249,6 +284,20 @@ def launch_fp8gemm_backward(dy: torch.Tensor, weight: torch.Tensor, ws: torch.Te
     return out_buffer
 
 
+def launch_fp8gemm_weight_grad(dy: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    M, N = dy.shape
+    M_x, K = x.shape
+
+    assert M == M_x
+    assert dy.dtype == torch.bfloat16 and x.dtype == torch.bfloat16
+    assert dy.stride(1) == 1 and x.stride(1) == 1
+
+    weight_grad = torch.empty((N, K), dtype = torch.bfloat16, device=dy.device)
+    fp8gemm_wgrad[lambda meta: (triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, x, weight_grad, M, N, K, dy.stride(0), x.stride(0), weight_grad.stride(0), 64, 64, 64)
+
+    return weight_grad
+
+
 def check_quantize(w: torch.Tensor, wo: torch.Tensor, ws: torch.Tensor):
     N, K = w.shape
     back_w = dequantize_weight(wo, ws)
@@ -301,5 +350,16 @@ if __name__ == "__main__":
     backward_relative_l2_error = torch.linalg.vector_norm(dx.float() - dx_original_ref) / torch.linalg.vector_norm(dx_original_ref)
     assert backward_relative_l2_error < 5e-2
 
+    dw = launch_fp8gemm_weight_grad(dy, x)
+    dyt_q, dyt_s = launch_row_quantize(dy.T.contiguous())
+    xt_q, xt_s = launch_row_quantize(x.T.contiguous())
+    dw_ref = dequantize_row(dyt_q, dyt_s) @ dequantize_row(xt_q, xt_s).T
+    torch.testing.assert_close(dw.to(torch.float32), dw_ref, rtol=1e-2, atol=1e-2)
+
+    dw_original_ref = dy.to(torch.float32).T @ x.to(torch.float32)
+    weight_grad_relative_l2_error = torch.linalg.vector_norm(dw.float() - dw_original_ref) / torch.linalg.vector_norm(dw_original_ref)
+    assert weight_grad_relative_l2_error < 5e-2
+
     print(f"fp8 forward check passed, relative L2 error: {relative_l2_error.item():.4f}")
     print(f"fp8 backward check passed, relative L2 error: {backward_relative_l2_error.item():.4f}")
+    print(f"fp8 weight-grad check passed, relative L2 error: {weight_grad_relative_l2_error.item():.4f}")
