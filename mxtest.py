@@ -8,6 +8,7 @@ def u16_max(x, y):
 
 @triton.jit
 def online_scale(x: tl.tensor):
+    tl.static_assert(x.dtype == tl.bfloat16)
     # x: [M, K]
     M: tl.constexpr = x.shape[0]
     K: tl.constexpr = x.shape[1]
@@ -83,14 +84,14 @@ def fp8_weight_quantize(weight, weight_out, weight_scale, N, K, w_stride1, wo_st
     wo_block_ptr = tl.make_block_ptr(weight_out, shape=(N, K), strides=(wo_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
     ws_block_ptr = tl.make_block_ptr(weight_scale, shape=(N, NUM_SCALE_BLOCKS), strides=(ws_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_SCALES), block_shape=(BLOCK_N, BLOCK_SCALES), order=(1,0))
 
-    w_block = tl.load(w_block_ptr, boundary_check=(1,0), padding_option='zero')
+    w_block = tl.load(w_block_ptr, boundary_check=(1,0), padding_option='zero').to(tl.bfloat16)
     w_block_scaled, ws_block = online_scale(w_block)
 
     tl.store(wo_block_ptr, w_block_scaled, boundary_check=(1,0))
     tl.store(ws_block_ptr, ws_block, boundary_check=(1,0))
 
 def launch_weight_quantize(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    assert weight.dtype == torch.bfloat16
+    assert weight.dtype == torch.bfloat16 or weight.dtype == torch.float32
     assert weight.stride(1) == 1
     N, K = weight.shape
     wo_buffer = torch.empty(weight.shape, dtype = torch.float8_e4m3fn, device = weight.device)
