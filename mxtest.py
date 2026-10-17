@@ -2,6 +2,41 @@ import triton
 import triton.language as tl
 import torch
 
+
+GEMM_CONFIGS = [
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=4),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+]
+
+DUAL_GEMM_CONFIGS = [
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=4),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 32, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+]
+
+WGRAD_CONFIGS = [
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=4),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+]
+
+
 @triton.jit
 def u16_max(x, y):
     return tl.inline_asm_elementwise('max.u16x2 $0, $1, $2;', '=r,r,r',[x,y], tl.uint16, True, 2)
@@ -71,13 +106,13 @@ def fast_sigmoid(x: tl.tensor):
     )
 
 
+@triton.autotune(configs=GEMM_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
-def fp8gemm_fwd(x_input, weight, weight_scale, bias, out, M, N, K, x_stride1, w_stride1, ws_stride1, o_stride1, HAS_BIAS: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+def fp8gemm_fwd(x_input, weight, weight_scale, bias, out, M, N, K, x_stride1, w_stride1, ws_stride1, o_stride1, HAS_BIAS: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
     # x is quantized online with one scale per 32 elements.
     # weight uses one scale per [32, 32] block.
     # x: [M, K], w: [N, K], ws: [ceil(N, 32), ceil(K, 32)]
     PRESET_GROUP_SIZE: tl.constexpr = 4
-    BLOCK_K: tl.constexpr = 64
     MX_BLOCK: tl.constexpr = 32
     BLOCK_SCALES: tl.constexpr = BLOCK_K // MX_BLOCK
     SCALE_ROWS: tl.constexpr = BLOCK_N // MX_BLOCK
@@ -131,6 +166,7 @@ def fp8gemm_fwd(x_input, weight, weight_scale, bias, out, M, N, K, x_stride1, w_
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
 
 
+@triton.autotune(configs=DUAL_GEMM_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8_swiglu_fwd(
     x_input,
@@ -155,11 +191,11 @@ def fp8_swiglu_fwd(
     STORE_AUX: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
 ):
     # Both weights use [32, 32] block scales. X is quantized online once and
     # reused for the gate and up projections.
     PRESET_GROUP_SIZE: tl.constexpr = 4
-    BLOCK_K: tl.constexpr = 64
     MX_BLOCK: tl.constexpr = 32
     BLOCK_SCALES: tl.constexpr = BLOCK_K // MX_BLOCK
     SCALE_ROWS: tl.constexpr = BLOCK_N // MX_BLOCK
@@ -244,14 +280,16 @@ def swiglu_backward_activations(dy, gate, up, dgate, dup, numel, BLOCK: tl.const
     gate_value = tl.load(gate + offsets, mask=mask, other=0.0).to(tl.float32)
     up_value = tl.load(up + offsets, mask=mask, other=0.0).to(tl.float32)
 
-    sigmoid = fast_sigmoid(gate_value)
-    silu = gate_value * sigmoid
-    dsilu = sigmoid * (1.0 + gate_value * (1.0 - sigmoid))
+    half_gate = gate_value * 0.5
+    tanh = fast_tanh(half_gate)
+    tanh_plus_one = tanh + 1.0
+    dsilu = 0.5 * (tanh_plus_one + half_gate * (1.0 - tanh * tanh))
 
     tl.store(dgate + offsets, (grad * dsilu * up_value).to(tl.bfloat16), mask=mask)
-    tl.store(dup + offsets, (grad * silu).to(tl.bfloat16), mask=mask)
+    tl.store(dup + offsets, (grad * half_gate * tanh_plus_one).to(tl.bfloat16), mask=mask)
 
 
+@triton.autotune(configs=DUAL_GEMM_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8_swiglu_bwd_dx(
     dgate,
@@ -338,6 +376,7 @@ def fp8_swiglu_bwd_dx(
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
 
 
+@triton.autotune(configs=GEMM_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8gemm_bwd(dy_input, weight, weight_scale, out, M, N, K, dy_stride1, w_stride1, ws_stride1, o_stride1, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
     # dy is quantized online with one scale per 32 elements.
@@ -388,6 +427,7 @@ def fp8gemm_bwd(dy_input, weight, weight_scale, out, M, N, K, dy_stride1, w_stri
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
 
 
+@triton.autotune(configs=WGRAD_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8gemm_wgrad(dy_input, x_input, weight_grad, M, N, K, dy_stride1, x_stride1, dw_stride1, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
     # dY: [M, N], X: [M, K], dW: [N, K]
@@ -513,7 +553,7 @@ def launch_fp8gemm(
 
     out_buffer = torch.empty((M, N), dtype = torch.bfloat16, device=x.device)
     bias_ptr = bias if bias is not None else ws
-    fp8gemm_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, weight, ws, bias_ptr, out_buffer, M, N, K, x.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0), bias is not None, 64, 64)
+    fp8gemm_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, weight, ws, bias_ptr, out_buffer, M, N, K, x.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0), bias is not None)
 
     return out_buffer
 
@@ -558,7 +598,7 @@ def launch_fp8_swiglu(
     out = torch.empty((M, N), dtype=torch.bfloat16, device=x.device)
     gate_ptr = gate_out_ptr if store_aux else out
     up_ptr = up_out_ptr if store_aux else out
-    fp8_swiglu_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, gate_weight, gate_scale, up_weight, up_scale, out, gate_ptr, up_ptr, M, N, K, x.stride(0), gate_weight.stride(0), gate_scale.stride(0), up_weight.stride(0), up_scale.stride(0), out.stride(0), gate_out_stride, up_out_stride, store_aux, 64, 64)
+    fp8_swiglu_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, gate_weight, gate_scale, up_weight, up_scale, out, gate_ptr, up_ptr, M, N, K, x.stride(0), gate_weight.stride(0), gate_scale.stride(0), up_weight.stride(0), up_scale.stride(0), out.stride(0), gate_out_stride, up_out_stride, store_aux)
 
     return out
 
@@ -604,7 +644,7 @@ def launch_fp8_swiglu_backward(
     grad_x = torch.empty((M, K), dtype=torch.bfloat16, device=dy.device)
     fp8_swiglu_bwd_dx[
         lambda meta: (triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(K, meta["BLOCK_K"]),)
-    ](dgate, dup, gate_weight, gate_scale, up_weight, up_scale, grad_x, M, N, K, dgate.stride(0), dup.stride(0), gate_weight.stride(0), gate_scale.stride(0), up_weight.stride(0), up_scale.stride(0), grad_x.stride(0), 64, 64, 64)
+    ](dgate, dup, gate_weight, gate_scale, up_weight, up_scale, grad_x, M, N, K, dgate.stride(0), dup.stride(0), gate_weight.stride(0), gate_scale.stride(0), up_weight.stride(0), up_scale.stride(0), grad_x.stride(0))
 
     grad_gate_weight = launch_fp8gemm_weight_grad(dgate, x, out_dtype=torch.float32)
     grad_up_weight = launch_fp8gemm_weight_grad(dup, x, out_dtype=torch.float32)
@@ -624,7 +664,7 @@ def launch_fp8gemm_backward(dy: torch.Tensor, weight: torch.Tensor, ws: torch.Te
     assert ws.shape == (triton.cdiv(N, 32), triton.cdiv(K, 32))
 
     out_buffer = torch.empty((M, K), dtype = torch.bfloat16, device=dy.device)
-    fp8gemm_bwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, weight, ws, out_buffer, M, N, K, dy.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0), 64, 64, 64)
+    fp8gemm_bwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, weight, ws, out_buffer, M, N, K, dy.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0))
 
     return out_buffer
 
@@ -639,7 +679,7 @@ def launch_fp8gemm_weight_grad(dy: torch.Tensor, x: torch.Tensor, out_dtype: tor
     assert out_dtype in (torch.bfloat16, torch.float32)
 
     weight_grad = torch.empty((N, K), dtype = out_dtype, device=dy.device)
-    fp8gemm_wgrad[lambda meta: (triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, x, weight_grad, M, N, K, dy.stride(0), x.stride(0), weight_grad.stride(0), 64, 64, 64)
+    fp8gemm_wgrad[lambda meta: (triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, x, weight_grad, M, N, K, dy.stride(0), x.stride(0), weight_grad.stride(0))
 
     return weight_grad
 
