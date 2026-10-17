@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 import mxtest
-from fp8_linear import FP8Linear
+from fp8_linear import FP8Linear, bind_fp8_optimizer
 
 
 class _FP8SwiGLUFunction(torch.autograd.Function):
@@ -112,7 +112,8 @@ class FP8SwiGLU(nn.Module):
     FP8Linear. Input gradients use FP8 block-scaled GEMMs. Weight gradients
     default to BF16 inputs with FP32 accumulation/output for better transpose
     GEMM throughput; set ``fp8_wgrad=True`` to force the FP8 weight-gradient
-    kernels.
+    kernels. Parameter updates are synchronized lazily before forward or when
+    a quantized-weight property is accessed.
     """
 
     def __init__(
@@ -165,6 +166,7 @@ class FP8SwiGLU(nn.Module):
         )
 
         self._synced_versions = None
+        self._fp8_dirty = False
         self._optimizer_hook = None
         self.reset_parameters()
         self.refresh_fp8_weights()
@@ -190,6 +192,12 @@ class FP8SwiGLU(nn.Module):
             self.up_weight._version,
             self.down_proj.master_weight._version,
         )
+        self._fp8_dirty = False
+        return self
+
+    def mark_fp8_dirty(self):
+        """Force the next quantized-weight access to refresh all FP8 caches."""
+        self._fp8_dirty = True
         return self
 
     def _sync_if_needed(self):
@@ -198,18 +206,30 @@ class FP8SwiGLU(nn.Module):
             self.up_weight._version,
             self.down_proj.master_weight._version,
         )
-        if self._synced_versions != versions:
+        if self._fp8_dirty or self._synced_versions != versions:
             self.refresh_fp8_weights()
 
+    @property
+    def quantized_gate_weight(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self._sync_if_needed()
+        return self._gate_weight_fp8, self._gate_weight_scale
+
+    @property
+    def quantized_up_weight(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self._sync_if_needed()
+        return self._up_weight_fp8, self._up_weight_scale
+
+    @property
+    def quantized_down_weight(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self._sync_if_needed()
+        return self.down_proj.quantized_weight
+
     def bind_optimizer(self, optimizer: torch.optim.Optimizer):
-        """Refresh all FP8 weights after every optimizer step."""
+        """Optionally refresh all FP8 weights after every optimizer step."""
         if self._optimizer_hook is not None:
             self._optimizer_hook.remove()
 
-        def post_step_hook(optimizer, args, kwargs):
-            self.refresh_fp8_weights()
-
-        self._optimizer_hook = optimizer.register_step_post_hook(post_step_hook)
+        self._optimizer_hook = bind_fp8_optimizer(self, optimizer)
         return self
 
     def forward(self, x: torch.Tensor):
@@ -223,18 +243,20 @@ class FP8SwiGLU(nn.Module):
             raise RuntimeError("FP8SwiGLU requires a CUDA device")
 
         x = x.contiguous()
-        self._sync_if_needed()
+        gate_fp8, gate_scale = self.quantized_gate_weight
+        up_fp8, up_scale = self.quantized_up_weight
+        down_fp8, down_scale = self.quantized_down_weight
         return _FP8SwiGLUFunction.apply(
             x,
             self.gate_weight,
             self.up_weight,
             self.down_proj.master_weight,
-            self._gate_weight_fp8,
-            self._gate_weight_scale,
-            self._up_weight_fp8,
-            self._up_weight_scale,
-            self.down_proj._weight_fp8,
-            self.down_proj._weight_scale,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+            down_fp8,
+            down_scale,
             self.down_proj.bias,
             self.fp8_wgrad,
         )
@@ -275,12 +297,12 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.AdamW(layer.parameters(), lr=1e-3)
     layer.bind_optimizer(optimizer)
-    old_gate_fp8 = layer._gate_weight_fp8.clone()
-    old_down_fp8 = layer.down_proj._weight_fp8.clone()
+    old_gate_fp8 = layer.quantized_gate_weight[0].clone()
+    old_down_fp8 = layer.quantized_down_weight[0].clone()
     optimizer.step()
 
-    assert not torch.equal(layer._gate_weight_fp8, old_gate_fp8)
-    assert not torch.equal(layer.down_proj._weight_fp8, old_down_fp8)
+    assert not torch.equal(layer.quantized_gate_weight[0], old_gate_fp8)
+    assert not torch.equal(layer.quantized_down_weight[0], old_down_fp8)
 
     print(
         "FP8SwiGLU check passed:",

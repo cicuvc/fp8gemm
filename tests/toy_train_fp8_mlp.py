@@ -7,12 +7,18 @@ boundary.  A same-initialization FP32 model is trained as a control.
 
 import argparse
 import math
+import sys
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from fp8_linear import FP8Linear
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from fp8_linear import FP8Linear, bind_fp8_optimizer
 
 
 class FP32Linear(nn.Module):
@@ -208,10 +214,11 @@ def compare_gradients(
 def quantized_snapshots(
     model: FP8TwoLayerMLP,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-    return {
-        "fc1": (model.fc1._weight_fp8.clone(), model.fc1._weight_scale.clone()),
-        "fc2": (model.fc2._weight_fp8.clone(), model.fc2._weight_scale.clone()),
-    }
+    snapshots = {}
+    for name, layer in zip(("fc1", "fc2"), model.fp8_layers()):
+        weight_fp8, weight_scale = layer.quantized_weight
+        snapshots[name] = (weight_fp8.clone(), weight_scale.clone())
+    return snapshots
 
 
 def train(
@@ -300,8 +307,7 @@ def main() -> None:
         lr=args.lr,
         weight_decay=1e-4,
     )
-    for layer in fp8_model.fp8_layers():
-        layer.bind_optimizer(fp8_optimizer)
+    bind_fp8_optimizer(fp8_model, fp8_optimizer)
 
     refresh_counts = train(
         fp8_model,

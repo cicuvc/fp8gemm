@@ -7,10 +7,16 @@ than to data loading, augmentation, or stochastic optimization.
 
 import argparse
 import math
+import sys
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from fp8_linear import FP8Linear
 
@@ -148,10 +154,8 @@ def train(
     quantized_changes = 0
     previous_quantized = None
     if fp8_model is not None:
-        previous_quantized = (
-            fp8_model._weight_fp8.clone(),
-            fp8_model._weight_scale.clone(),
-        )
+        weight_fp8, weight_scale = fp8_model.quantized_weight
+        previous_quantized = (weight_fp8.clone(), weight_scale.clone())
 
     for step in range(1, steps + 1):
         optimizer.zero_grad(set_to_none=True)
@@ -165,10 +169,7 @@ def train(
         losses.append(loss_value)
 
         if fp8_model is not None:
-            current_quantized = (
-                fp8_model._weight_fp8,
-                fp8_model._weight_scale,
-            )
+            current_quantized = fp8_model.quantized_weight
             if not all(
                 torch.equal(previous, current)
                 for previous, current in zip(previous_quantized, current_quantized)

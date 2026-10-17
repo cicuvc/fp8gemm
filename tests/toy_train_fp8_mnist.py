@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from fp8_linear import FP8Linear
+from fp8_linear import FP8Linear, step_fp8_optimizers
 from tests.toy_train_fp8_mlp import FP32Linear
 
 
@@ -265,18 +265,6 @@ def zero_grad(optimizers: list[torch.optim.Optimizer]) -> None:
         optimizer.zero_grad(set_to_none=True)
 
 
-def step_optimizers(
-    optimizers: list[torch.optim.Optimizer],
-    fp8_model: FP8MNISTMLP,
-) -> None:
-    for optimizer in optimizers:
-        optimizer.step()
-    # Weight and bias live in different optimizers, so refresh only after both
-    # have stepped. This also avoids coupling the refresh to a single hook.
-    for layer in fp8_model.fp8_layers():
-        layer.refresh_fp8_weight()
-
-
 def compute_loss(
     model: nn.Module,
     x: torch.Tensor,
@@ -335,10 +323,8 @@ def quantized_snapshots(
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     snapshots = {}
     for name, layer in zip(("fc1", "fc2", "fc3"), model.fp8_layers()):
-        snapshots[name] = (
-            layer._weight_fp8.clone(),
-            layer._weight_scale.clone(),
-        )
+        weight_fp8, weight_scale = layer.quantized_weight
+        snapshots[name] = (weight_fp8.clone(), weight_scale.clone())
     return snapshots
 
 
@@ -402,7 +388,7 @@ def train_models(
             if not torch.isfinite(fp8_loss):
                 raise RuntimeError(f"FP8 produced a non-finite loss at step {global_step}")
             fp8_loss.backward()
-            step_optimizers(fp8_optimizers, fp8_model)
+            step_fp8_optimizers(fp8_model, fp8_optimizers)
 
             current = quantized_snapshots(fp8_model)
             for name in snapshots:

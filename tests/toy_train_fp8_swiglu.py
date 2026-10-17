@@ -6,10 +6,16 @@ is trained on identical data as the control.
 """
 
 import argparse
+import sys
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from fp8_swiglu import FP8SwiGLU
 from tests.toy_train_fp8_mlp import make_dataset
@@ -165,13 +171,13 @@ def compare_gradients(
 def quantized_snapshots(
     model: FP8SwiGLU,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    gate_fp8, gate_scale = model.quantized_gate_weight
+    up_fp8, up_scale = model.quantized_up_weight
+    down_fp8, down_scale = model.quantized_down_weight
     return {
-        "gate": (model._gate_weight_fp8.clone(), model._gate_weight_scale.clone()),
-        "up": (model._up_weight_fp8.clone(), model._up_weight_scale.clone()),
-        "down": (
-            model.down_proj._weight_fp8.clone(),
-            model.down_proj._weight_scale.clone(),
-        ),
+        "gate": (gate_fp8.clone(), gate_scale.clone()),
+        "up": (up_fp8.clone(), up_scale.clone()),
+        "down": (down_fp8.clone(), down_scale.clone()),
     }
 
 
@@ -264,8 +270,6 @@ def main() -> None:
         lr=args.lr,
         weight_decay=1e-4,
     )
-    fp8_model.bind_optimizer(fp8_optimizer)
-
     refresh_counts = train(
         fp8_model,
         fp8_optimizer,

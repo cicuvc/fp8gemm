@@ -1,4 +1,5 @@
 import math
+from collections.abc import Iterable, Iterator
 
 import torch
 from torch import nn
@@ -38,6 +39,9 @@ class FP8Linear(nn.Module):
 
     The forward and input-gradient GEMMs consume one FP8 weight quantized with
     one E8M0 scale per 32x32 block. The weight gradient is accumulated in FP32.
+    Standard in-place parameter updates are detected lazily before forward or
+    quantized-weight access. Call ``mark_fp8_dirty`` for writes that bypass the
+    parameter version counter, such as direct ``.data`` mutation.
     """
 
     def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None):
@@ -56,6 +60,7 @@ class FP8Linear(nn.Module):
         self.register_buffer("_weight_fp8", torch.empty(0, dtype=torch.float8_e4m3fn), persistent=False)
         self.register_buffer("_weight_scale", torch.empty(0, dtype=torch.uint8), persistent=False)
         self._synced_version = -1
+        self._fp8_dirty = False
         self._optimizer_hook = None
 
         self.reset_parameters()
@@ -79,21 +84,37 @@ class FP8Linear(nn.Module):
                 self.master_weight.detach()
             )
             self._synced_version = self.master_weight._version
+            self._fp8_dirty = False
+        return self
+
+    def refresh_fp8_weights(self):
+        return self.refresh_fp8_weight()
+
+    def mark_fp8_dirty(self):
+        """Force the next quantized-weight access to refresh the FP8 cache."""
+        self._fp8_dirty = True
         return self
 
     def _sync_if_needed(self):
-        if self._synced_version != self.master_weight._version:
+        if self._fp8_dirty or self._synced_version != self.master_weight._version:
             self.refresh_fp8_weight()
 
+    @property
+    def quantized_weight(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return a synchronized FP8 weight and its block scales."""
+        self._sync_if_needed()
+        return self._weight_fp8, self._weight_scale
+
     def bind_optimizer(self, optimizer: torch.optim.Optimizer):
-        """Refresh FP8 weights after every optimizer step."""
+        """Optionally refresh this layer after every optimizer step.
+
+        This is an eager-sync optimization. Forward passes already detect
+        standard in-place parameter updates and synchronize lazily.
+        """
         if self._optimizer_hook is not None:
             self._optimizer_hook.remove()
 
-        def post_step_hook(optimizer, args, kwargs):
-            self.refresh_fp8_weight()
-
-        self._optimizer_hook = optimizer.register_step_post_hook(post_step_hook)
+        self._optimizer_hook = bind_fp8_optimizer(self, optimizer)
         return self
 
     def forward(self, x: torch.Tensor):
@@ -107,12 +128,12 @@ class FP8Linear(nn.Module):
             raise RuntimeError("FP8Linear requires a CUDA device")
 
         x = x.contiguous()
-        self._sync_if_needed()
+        weight_fp8, weight_scale = self.quantized_weight
         return _FP8LinearFunction.apply(
             x,
             self.master_weight,
-            self._weight_fp8,
-            self._weight_scale,
+            weight_fp8,
+            weight_scale,
             self.bias,
         )
 
@@ -121,6 +142,56 @@ class FP8Linear(nn.Module):
             f"in_features={self.in_features}, out_features={self.out_features}, "
             f"bias={self.bias is not None}"
         )
+
+
+def _is_fp8_sync_module(module: nn.Module) -> bool:
+    return (
+        callable(getattr(module, "refresh_fp8_weights", None))
+        and callable(getattr(module, "_sync_if_needed", None))
+    )
+
+
+def iter_fp8_modules(module: nn.Module) -> Iterator[nn.Module]:
+    """Yield outermost modules that own synchronized FP8 caches."""
+    if _is_fp8_sync_module(module):
+        yield module
+        return
+    for child in module.children():
+        yield from iter_fp8_modules(child)
+
+
+def refresh_fp8_modules(module: nn.Module) -> None:
+    """Synchronize all FP8 caches under ``module`` immediately."""
+    for fp8_module in iter_fp8_modules(module):
+        fp8_module.refresh_fp8_weights()
+
+
+def mark_fp8_modules_dirty(module: nn.Module) -> None:
+    """Mark all FP8 caches under ``module`` dirty for a later lazy refresh."""
+    for fp8_module in iter_fp8_modules(module):
+        fp8_module.mark_fp8_dirty()
+
+
+def bind_fp8_optimizer(
+    module: nn.Module,
+    optimizer: torch.optim.Optimizer,
+):
+    """Eagerly synchronize FP8 caches once after an optimizer step."""
+
+    def post_step_hook(optimizer, args, kwargs):
+        refresh_fp8_modules(module)
+
+    return optimizer.register_step_post_hook(post_step_hook)
+
+
+def step_fp8_optimizers(
+    module: nn.Module,
+    optimizers: Iterable[torch.optim.Optimizer],
+) -> None:
+    """Step all optimizers, then refresh each FP8 cache exactly once."""
+    for optimizer in optimizers:
+        optimizer.step()
+    refresh_fp8_modules(module)
 
 
 if __name__ == "__main__":
@@ -135,9 +206,10 @@ if __name__ == "__main__":
     assert out.dtype == torch.bfloat16
     assert out.shape == (M, N)
     xq, x_scale = mxtest.launch_row_quantize(x.detach())
+    weight_fp8, weight_scale = layer.quantized_weight
     expected = (
         mxtest.dequantize_row(xq, x_scale)
-        @ mxtest.dequantize_weight(layer._weight_fp8, layer._weight_scale).T
+        @ mxtest.dequantize_weight(weight_fp8, weight_scale).T
         + layer.bias.detach()[None, :]
     ).to(torch.bfloat16)
     torch.testing.assert_close(out, expected, rtol=1e-2, atol=1e-2)
@@ -152,10 +224,10 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.SGD(layer.parameters(), lr=1e-2)
     layer.bind_optimizer(optimizer)
-    previous_fp8 = layer._weight_fp8.clone()
+    previous_fp8 = layer.quantized_weight[0].clone()
     optimizer.step()
 
-    assert not torch.equal(previous_fp8, layer._weight_fp8)
+    assert not torch.equal(previous_fp8, layer.quantized_weight[0])
     expected_fp8, expected_scale = mxtest.launch_weight_quantize(layer.master_weight.detach())
     assert torch.equal(layer._weight_fp8, expected_fp8)
     assert torch.equal(layer._weight_scale, expected_scale)
