@@ -73,8 +73,8 @@ def benchmark_case(m, k, hidden, out_features):
         "linear_fwd": format_config(mxtest.fp8gemm_fwd),
         "swiglu_dx": format_config(mxtest.fp8_swiglu_bwd_dx),
         "down_dx_act": format_config(mxtest.fp8gemm_bwd_swiglu_act),
-        "gate_up_wgrad": format_config(mxtest.fp8gemm_wgrad_dual),
-        "down_wgrad": format_config(mxtest.fp8gemm_wgrad),
+        "gate_up_wgrad": format_config(mxtest.bf16_wgrad_dual),
+        "down_wgrad": format_config(mxtest.bf16_wgrad),
     }
 
     return {

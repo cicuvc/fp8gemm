@@ -22,6 +22,7 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
         down_fp8,
         down_scale,
         bias,
+        use_fp8_wgrad,
     ):
         gate = torch.empty(
             (x.shape[0], gate_fp8.shape[0]),
@@ -52,6 +53,7 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
             down_scale,
         )
         ctx.has_bias = bias is not None
+        ctx.use_fp8_wgrad = use_fp8_wgrad
         return out
 
     @staticmethod
@@ -84,6 +86,7 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
             up_fp8,
             up_scale,
             x,
+            use_fp8_wgrad=ctx.use_fp8_wgrad,
         )
         grad_bias = grad_output.float().sum(dim=0) if ctx.has_bias else None
         return (
@@ -98,14 +101,18 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
             None,
             None,
             grad_bias,
+            None,
         )
 
 
 class FP8SwiGLU(nn.Module):
     """FP8 SwiGLU MLP with FP32 master weights and BF16 activations.
 
-    The gate and up projections are fused. The down projection reuses
-    FP8Linear and can optionally include a FP32 bias.
+    The gate and up projections are fused, and the down projection reuses
+    FP8Linear. Input gradients use FP8 block-scaled GEMMs. Weight gradients
+    default to BF16 inputs with FP32 accumulation/output for better transpose
+    GEMM throughput; set ``fp8_wgrad=True`` to force the FP8 weight-gradient
+    kernels.
     """
 
     def __init__(
@@ -114,12 +121,14 @@ class FP8SwiGLU(nn.Module):
         hidden_features: int,
         out_features: int,
         bias: bool = True,
+        fp8_wgrad: bool = False,
         device=None,
     ):
         super().__init__()
         self.in_features = in_features
         self.hidden_features = hidden_features
         self.out_features = out_features
+        self.fp8_wgrad = fp8_wgrad
 
         self.gate_weight = nn.Parameter(
             torch.empty((hidden_features, in_features), dtype=torch.float32, device=device)
@@ -227,6 +236,7 @@ class FP8SwiGLU(nn.Module):
             self.down_proj._weight_fp8,
             self.down_proj._weight_scale,
             self.down_proj.bias,
+            self.fp8_wgrad,
         )
 
     def extra_repr(self):

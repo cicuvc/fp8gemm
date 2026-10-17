@@ -53,6 +53,13 @@ DOWN_ACT_CONFIGS = [
     triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=2),
 ]
 
+BF16_WGRAD_CONFIGS = [
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+]
+
 
 @triton.jit
 def u16_max(x, y):
@@ -619,6 +626,91 @@ def fp8gemm_wgrad_dual(
     tl.store(o1_block_ptr, acc1.to(weight_grad1.dtype.element_ty), boundary_check=(1,0))
 
 
+@triton.autotune(configs=BF16_WGRAD_CONFIGS, key=["M", "N", "K"], cache_results=True)
+@triton.jit
+def bf16_wgrad(
+    dy_input,
+    x_input,
+    weight_grad,
+    M,
+    N,
+    K,
+    dy_stride1,
+    x_stride1,
+    dw_stride1,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    # BF16 inputs with an FP32 accumulator and FP32 output. This avoids
+    # repeated online scaling for the transpose-oriented weight-gradient GEMM.
+    NUM_KBLOCKS = tl.cdiv(K, BLOCK_K)
+    pid = tl.program_id(0)
+    row_idx = pid // NUM_KBLOCKS
+    col_idx = pid % NUM_KBLOCKS
+
+    dy_block_ptr = tl.make_block_ptr(dy_input, shape=(M,N), strides=(dy_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    x_block_ptr = tl.make_block_ptr(x_input, shape=(M,K), strides=(x_stride1, 1), offsets=(0, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+
+    acc = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    for i in tl.range(0, M, BLOCK_M):
+        dy_block = tl.load(dy_block_ptr, boundary_check=(1,0), padding_option='zero')
+        x_block = tl.load(x_block_ptr, boundary_check=(1,0), padding_option='zero')
+        acc = tl.dot(tl.trans(dy_block), x_block, acc)
+        dy_block_ptr = tl.advance(dy_block_ptr, (BLOCK_M, 0))
+        x_block_ptr = tl.advance(x_block_ptr, (BLOCK_M, 0))
+
+    o_block_ptr = tl.make_block_ptr(weight_grad, shape=(N,K), strides=(dw_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    tl.store(o_block_ptr, acc.to(weight_grad.dtype.element_ty), boundary_check=(1,0))
+
+
+@triton.autotune(configs=BF16_WGRAD_CONFIGS, key=["M", "N", "K"], cache_results=True)
+@triton.jit
+def bf16_wgrad_dual(
+    dy0_input,
+    dy1_input,
+    x_input,
+    weight_grad0,
+    weight_grad1,
+    M,
+    N,
+    K,
+    dy0_stride1,
+    dy1_stride1,
+    x_stride1,
+    dw0_stride1,
+    dw1_stride1,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    NUM_KBLOCKS = tl.cdiv(K, BLOCK_K)
+    pid = tl.program_id(0)
+    row_idx = pid // NUM_KBLOCKS
+    col_idx = pid % NUM_KBLOCKS
+
+    dy0_block_ptr = tl.make_block_ptr(dy0_input, shape=(M,N), strides=(dy0_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    dy1_block_ptr = tl.make_block_ptr(dy1_input, shape=(M,N), strides=(dy1_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    x_block_ptr = tl.make_block_ptr(x_input, shape=(M,K), strides=(x_stride1, 1), offsets=(0, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+
+    acc0 = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    acc1 = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    for i in tl.range(0, M, BLOCK_M):
+        dy0_block = tl.load(dy0_block_ptr, boundary_check=(1,0), padding_option='zero')
+        dy1_block = tl.load(dy1_block_ptr, boundary_check=(1,0), padding_option='zero')
+        x_block = tl.load(x_block_ptr, boundary_check=(1,0), padding_option='zero')
+        acc0 = tl.dot(tl.trans(dy0_block), x_block, acc0)
+        acc1 = tl.dot(tl.trans(dy1_block), x_block, acc1)
+        dy0_block_ptr = tl.advance(dy0_block_ptr, (BLOCK_M, 0))
+        dy1_block_ptr = tl.advance(dy1_block_ptr, (BLOCK_M, 0))
+        x_block_ptr = tl.advance(x_block_ptr, (BLOCK_M, 0))
+
+    o0_block_ptr = tl.make_block_ptr(weight_grad0, shape=(N,K), strides=(dw0_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    o1_block_ptr = tl.make_block_ptr(weight_grad1, shape=(N,K), strides=(dw1_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    tl.store(o0_block_ptr, acc0.to(weight_grad0.dtype.element_ty), boundary_check=(1,0))
+    tl.store(o1_block_ptr, acc1.to(weight_grad1.dtype.element_ty), boundary_check=(1,0))
+
+
 @triton.jit
 def fp8_row_quantize(weight, weight_out, weight_scale, N, K, w_stride1, wo_stride1, ws_stride1, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
     pid = tl.program_id(0)
@@ -827,6 +919,7 @@ def launch_fp8_down_swiglu_backward(
     up_scale: torch.Tensor,
     x: torch.Tensor,
     return_intermediate_grads: bool = False,
+    use_fp8_wgrad: bool = False,
 ):
     M, O = dy.shape
     M_hidden, H = hidden.shape
@@ -885,17 +978,30 @@ def launch_fp8_down_swiglu_backward(
         grad_x.stride(0),
     )
 
-    grad_gate_weight, grad_up_weight = launch_fp8gemm_weight_grad_dual(
-        dgate,
-        dup,
-        x,
-        out_dtype=torch.float32,
-    )
-    grad_down_weight = launch_fp8gemm_weight_grad(
-        dy,
-        hidden,
-        out_dtype=torch.float32,
-    )
+    if use_fp8_wgrad:
+        grad_gate_weight, grad_up_weight = launch_fp8gemm_weight_grad_dual(
+            dgate,
+            dup,
+            x,
+            out_dtype=torch.float32,
+        )
+        grad_down_weight = launch_fp8gemm_weight_grad(
+            dy,
+            hidden,
+            out_dtype=torch.float32,
+        )
+    else:
+        grad_gate_weight, grad_up_weight = launch_bf16_weight_grad_dual(
+            dgate,
+            dup,
+            x,
+            out_dtype=torch.float32,
+        )
+        grad_down_weight = launch_bf16_weight_grad(
+            dy,
+            hidden,
+            out_dtype=torch.float32,
+        )
 
     if return_intermediate_grads:
         return (
@@ -961,6 +1067,72 @@ def launch_fp8gemm_weight_grad_dual(
         triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']),
     )
     fp8gemm_wgrad_dual[grid](
+        dy0,
+        dy1,
+        x,
+        weight_grad0,
+        weight_grad1,
+        M,
+        N,
+        K,
+        dy0.stride(0),
+        dy1.stride(0),
+        x.stride(0),
+        weight_grad0.stride(0),
+        weight_grad1.stride(0),
+    )
+    return weight_grad0, weight_grad1
+
+
+def launch_bf16_weight_grad(
+    dy: torch.Tensor,
+    x: torch.Tensor,
+    out_dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    M, N = dy.shape
+    M_x, K = x.shape
+    assert M_x == M
+    assert dy.dtype == torch.bfloat16 and x.dtype == torch.bfloat16
+    assert dy.stride(1) == 1 and x.stride(1) == 1
+
+    weight_grad = torch.empty((N, K), dtype=out_dtype, device=dy.device)
+    grid = lambda meta: (
+        triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']),
+    )
+    bf16_wgrad[grid](
+        dy,
+        x,
+        weight_grad,
+        M,
+        N,
+        K,
+        dy.stride(0),
+        x.stride(0),
+        weight_grad.stride(0),
+    )
+    return weight_grad
+
+
+def launch_bf16_weight_grad_dual(
+    dy0: torch.Tensor,
+    dy1: torch.Tensor,
+    x: torch.Tensor,
+    out_dtype: torch.dtype = torch.float32,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    M, N = dy0.shape
+    M_x, K = x.shape
+    assert dy1.shape == dy0.shape
+    assert M_x == M
+    assert dy0.dtype == torch.bfloat16 and dy1.dtype == torch.bfloat16
+    assert x.dtype == torch.bfloat16
+    assert dy0.stride(1) == 1 and dy1.stride(1) == 1 and x.stride(1) == 1
+
+    weight_grad0 = torch.empty((N, K), dtype=out_dtype, device=dy0.device)
+    weight_grad1 = torch.empty_like(weight_grad0)
+    grid = lambda meta: (
+        triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']),
+    )
+    bf16_wgrad_dual[grid](
         dy0,
         dy1,
         x,
