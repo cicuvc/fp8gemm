@@ -45,7 +45,7 @@ def block_online_scale(x: tl.tensor):
 
 
 @triton.jit
-def fp8gemm_fwd(x_input, weight, weight_scale, out, M, N, K, x_stride1, w_stride1, ws_stride1, o_stride1, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+def fp8gemm_fwd(x_input, weight, weight_scale, bias, out, M, N, K, x_stride1, w_stride1, ws_stride1, o_stride1, HAS_BIAS: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     # x is quantized online with one scale per 32 elements.
     # weight uses one scale per [32, 32] block.
     # x: [M, K], w: [N, K], ws: [ceil(N, 32), ceil(K, 32)]
@@ -94,6 +94,11 @@ def fp8gemm_fwd(x_input, weight, weight_scale, out, M, N, K, x_stride1, w_stride
         x_block_ptr = tl.advance(x_block_ptr, (0, BLOCK_K))
         w_block_ptr = tl.advance(w_block_ptr, (0, BLOCK_K))
         ws_block_ptr = tl.advance(ws_block_ptr, (0, BLOCK_SCALES))
+
+    if HAS_BIAS:
+        bias_offsets = col_idx * BLOCK_N + tl.arange(0, BLOCK_N)
+        bias_block = tl.load(bias + bias_offsets, mask=bias_offsets < N, other=0.0)
+        acc += bias_block[None, :]
 
     o_block_ptr = tl.make_block_ptr(out, shape=(M,N), strides=(o_stride1, 1), offsets=(row_idx * BLOCK_M, col_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
@@ -255,16 +260,26 @@ def launch_weight_quantize(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Te
 
     return wo_buffer, ws_buffer
 
-def launch_fp8gemm(x: torch.Tensor, weight: torch.Tensor, ws: torch.Tensor) -> torch.Tensor:
+def launch_fp8gemm(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    ws: torch.Tensor,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
     M, K = x.shape
     N, _ = weight.shape
 
     assert x.dtype == torch.bfloat16
     assert weight.dtype == torch.float8_e4m3fn and ws.dtype == torch.uint8
     assert ws.shape == (triton.cdiv(N, 32), triton.cdiv(K, 32))
+    if bias is not None:
+        assert bias.dtype == torch.float32
+        assert bias.shape == (N,)
+        assert bias.device == x.device
 
     out_buffer = torch.empty((M, N), dtype = torch.bfloat16, device=x.device)
-    fp8gemm_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, weight, ws, out_buffer, M, N, K, x.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0), 64, 64)
+    bias_ptr = bias if bias is not None else ws
+    fp8gemm_fwd[lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(N, meta['BLOCK_N']), )](x, weight, ws, bias_ptr, out_buffer, M, N, K, x.stride(0), weight.stride(0), ws.stride(0), out_buffer.stride(0), bias is not None, 64, 64)
 
     return out_buffer
 
@@ -284,15 +299,16 @@ def launch_fp8gemm_backward(dy: torch.Tensor, weight: torch.Tensor, ws: torch.Te
     return out_buffer
 
 
-def launch_fp8gemm_weight_grad(dy: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+def launch_fp8gemm_weight_grad(dy: torch.Tensor, x: torch.Tensor, out_dtype: torch.dtype = torch.bfloat16) -> torch.Tensor:
     M, N = dy.shape
     M_x, K = x.shape
 
     assert M == M_x
     assert dy.dtype == torch.bfloat16 and x.dtype == torch.bfloat16
     assert dy.stride(1) == 1 and x.stride(1) == 1
+    assert out_dtype in (torch.bfloat16, torch.float32)
 
-    weight_grad = torch.empty((N, K), dtype = torch.bfloat16, device=dy.device)
+    weight_grad = torch.empty((N, K), dtype = out_dtype, device=dy.device)
     fp8gemm_wgrad[lambda meta: (triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, x, weight_grad, M, N, K, dy.stride(0), x.stride(0), weight_grad.stride(0), 64, 64, 64)
 
     return weight_grad
