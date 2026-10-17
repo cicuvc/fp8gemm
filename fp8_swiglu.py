@@ -9,14 +9,27 @@ from fp8_linear import FP8Linear
 
 class _FP8SwiGLUFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, gate_master, up_master, gate_fp8, gate_scale, up_fp8, up_scale):
+    def forward(
+        ctx,
+        x,
+        gate_master,
+        up_master,
+        down_master,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        down_fp8,
+        down_scale,
+        bias,
+    ):
         gate = torch.empty(
             (x.shape[0], gate_fp8.shape[0]),
             dtype=torch.bfloat16,
             device=x.device,
         )
         up = torch.empty_like(gate)
-        out = mxtest.launch_fp8_swiglu(
+        hidden = mxtest.launch_fp8_swiglu(
             x,
             gate_fp8,
             gate_scale,
@@ -25,35 +38,67 @@ class _FP8SwiGLUFunction(torch.autograd.Function):
             gate,
             up,
         )
+        out = mxtest.launch_fp8gemm(hidden, down_fp8, down_scale, bias)
         ctx.save_for_backward(
             x,
             gate,
             up,
+            hidden,
             gate_fp8,
             gate_scale,
             up_fp8,
             up_scale,
+            down_fp8,
+            down_scale,
         )
+        ctx.has_bias = bias is not None
         return out
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, gate, up, gate_fp8, gate_scale, up_fp8, up_scale = ctx.saved_tensors
-        grad_output = grad_output.contiguous()
-        if grad_output.dtype != torch.bfloat16:
-            grad_output = grad_output.to(torch.bfloat16)
-
-        grad_x, grad_gate, grad_up = mxtest.launch_fp8_swiglu_backward(
-            grad_output,
+        (
             x,
             gate,
             up,
+            hidden,
             gate_fp8,
             gate_scale,
             up_fp8,
             up_scale,
+            down_fp8,
+            down_scale,
+        ) = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        if grad_output.dtype != torch.bfloat16:
+            grad_output = grad_output.to(torch.bfloat16)
+
+        grad_x, grad_gate, grad_up, grad_down = mxtest.launch_fp8_down_swiglu_backward(
+            grad_output,
+            hidden,
+            gate,
+            up,
+            down_fp8,
+            down_scale,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+            x,
         )
-        return grad_x, grad_gate, grad_up, None, None, None, None
+        grad_bias = grad_output.float().sum(dim=0) if ctx.has_bias else None
+        return (
+            grad_x,
+            grad_gate,
+            grad_up,
+            grad_down,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            grad_bias,
+        )
 
 
 class FP8SwiGLU(nn.Module):
@@ -130,15 +175,20 @@ class FP8SwiGLU(nn.Module):
             self._up_weight_fp8, self._up_weight_scale = (
                 mxtest.launch_weight_quantize(self.up_weight.detach())
             )
-            self._synced_versions = (
-                self.gate_weight._version,
-                self.up_weight._version,
-            )
         self.down_proj.refresh_fp8_weight()
+        self._synced_versions = (
+            self.gate_weight._version,
+            self.up_weight._version,
+            self.down_proj.master_weight._version,
+        )
         return self
 
     def _sync_if_needed(self):
-        versions = (self.gate_weight._version, self.up_weight._version)
+        versions = (
+            self.gate_weight._version,
+            self.up_weight._version,
+            self.down_proj.master_weight._version,
+        )
         if self._synced_versions != versions:
             self.refresh_fp8_weights()
 
@@ -165,16 +215,19 @@ class FP8SwiGLU(nn.Module):
 
         x = x.contiguous()
         self._sync_if_needed()
-        hidden = _FP8SwiGLUFunction.apply(
+        return _FP8SwiGLUFunction.apply(
             x,
             self.gate_weight,
             self.up_weight,
+            self.down_proj.master_weight,
             self._gate_weight_fp8,
             self._gate_weight_scale,
             self._up_weight_fp8,
             self._up_weight_scale,
+            self.down_proj._weight_fp8,
+            self.down_proj._weight_scale,
+            self.down_proj.bias,
         )
-        return self.down_proj(hidden)
 
     def extra_repr(self):
         return (

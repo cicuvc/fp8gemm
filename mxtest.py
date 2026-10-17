@@ -36,6 +36,23 @@ WGRAD_CONFIGS = [
     triton.Config({"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
 ]
 
+DUAL_WGRAD_CONFIGS = [
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=4),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+]
+
+DOWN_ACT_CONFIGS = [
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
+    triton.Config({"BLOCK_M": 128, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=2),
+]
+
 
 @triton.jit
 def u16_max(x, y):
@@ -427,6 +444,89 @@ def fp8gemm_bwd(dy_input, weight, weight_scale, out, M, N, K, dy_stride1, w_stri
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
 
 
+@triton.autotune(configs=DOWN_ACT_CONFIGS, key=["M", "N", "K"])
+@triton.jit
+def fp8gemm_bwd_swiglu_act(
+    dy_input,
+    weight,
+    weight_scale,
+    gate,
+    up,
+    dgate,
+    dup,
+    M,
+    N,
+    K,
+    dy_stride1,
+    w_stride1,
+    ws_stride1,
+    gate_stride1,
+    up_stride1,
+    dg_stride1,
+    du_stride1,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    # dY @ Wd and the SwiGLU activation gradient share the same [M, H] tile.
+    # dH is rounded through BF16 to preserve the two-kernel numerical behavior.
+    MX_BLOCK: tl.constexpr = 32
+    SCALE_ROWS: tl.constexpr = BLOCK_N // MX_BLOCK
+    SCALE_COLS: tl.constexpr = BLOCK_K // MX_BLOCK
+    DY_SCALES: tl.constexpr = BLOCK_N // MX_BLOCK
+
+    NUM_KBLOCKS = tl.cdiv(K, BLOCK_K)
+    NUM_SCALE_ROWS = tl.cdiv(N, MX_BLOCK)
+    NUM_SCALE_COLS = tl.cdiv(K, MX_BLOCK)
+
+    pid = tl.program_id(0)
+    row_idx = pid // NUM_KBLOCKS
+    col_idx = pid % NUM_KBLOCKS
+
+    dy_block_ptr = tl.make_block_ptr(dy_input, shape=(M,N), strides=(dy_stride1, 1), offsets=(row_idx * BLOCK_M, 0), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    w_block_ptr = tl.make_block_ptr(weight, shape=(N,K), strides=(w_stride1, 1), offsets=(0, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    ws_block_ptr = tl.make_block_ptr(weight_scale, shape=(NUM_SCALE_ROWS, NUM_SCALE_COLS), strides=(ws_stride1, 1), offsets=(0, col_idx * SCALE_COLS), block_shape=(SCALE_ROWS, SCALE_COLS), order=(1,0))
+
+    acc = tl.zeros((BLOCK_M, BLOCK_K), dtype=tl.float32)
+    for i in tl.range(0, N, BLOCK_N):
+        dy_block = tl.load(dy_block_ptr, boundary_check=(1,0), padding_option='zero')
+        dy_block_scaled, dys_block = online_scale(dy_block)
+
+        w_block = tl.load(w_block_ptr, boundary_check=(1,0), padding_option='zero')
+        ws_block = tl.load(ws_block_ptr, boundary_check=(1,0), padding_option='zero')
+        ws_block = tl.reshape(
+            tl.broadcast_to(
+                tl.trans(ws_block)[:,None,:],
+                (SCALE_COLS, MX_BLOCK, DY_SCALES),
+            ),
+            (BLOCK_K, DY_SCALES),
+        )
+
+        acc = tl.dot_scaled(dy_block_scaled, dys_block, 'e4m3', w_block, ws_block, 'e4m3', acc)
+
+        dy_block_ptr = tl.advance(dy_block_ptr, (0, BLOCK_N))
+        w_block_ptr = tl.advance(w_block_ptr, (BLOCK_N, 0))
+        ws_block_ptr = tl.advance(ws_block_ptr, (SCALE_ROWS, 0))
+
+    gate_ptr = tl.make_block_ptr(gate, shape=(M,K), strides=(gate_stride1, 1), offsets=(row_idx * BLOCK_M, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+    up_ptr = tl.make_block_ptr(up, shape=(M,K), strides=(up_stride1, 1), offsets=(row_idx * BLOCK_M, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+    gate_block = tl.load(gate_ptr, boundary_check=(1,0), padding_option='zero').to(tl.float32)
+    up_block = tl.load(up_ptr, boundary_check=(1,0), padding_option='zero').to(tl.float32)
+
+    dH_block = acc.to(tl.bfloat16).to(tl.float32)
+    half_gate = gate_block * 0.5
+    tanh = fast_tanh(half_gate)
+    tanh_plus_one = tanh + 1.0
+    dsilu = 0.5 * (tanh_plus_one + half_gate * (1.0 - tanh * tanh))
+    dgate_block = dH_block * dsilu * up_block
+    dup_block = dH_block * half_gate * tanh_plus_one
+
+    dgate_ptr = tl.make_block_ptr(dgate, shape=(M,K), strides=(dg_stride1, 1), offsets=(row_idx * BLOCK_M, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+    dup_ptr = tl.make_block_ptr(dup, shape=(M,K), strides=(du_stride1, 1), offsets=(row_idx * BLOCK_M, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+    tl.store(dgate_ptr, dgate_block.to(tl.bfloat16), boundary_check=(1,0))
+    tl.store(dup_ptr, dup_block.to(tl.bfloat16), boundary_check=(1,0))
+
+
 @triton.autotune(configs=WGRAD_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8gemm_wgrad(dy_input, x_input, weight_grad, M, N, K, dy_stride1, x_stride1, dw_stride1, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
@@ -461,6 +561,62 @@ def fp8gemm_wgrad(dy_input, x_input, weight_grad, M, N, K, dy_stride1, x_stride1
 
     o_block_ptr = tl.make_block_ptr(weight_grad, shape=(N,K), strides=(dw_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
     tl.store(o_block_ptr, acc.to(weight_grad.dtype.element_ty), boundary_check=(1,0))
+
+
+@triton.autotune(configs=DUAL_WGRAD_CONFIGS, key=["M", "N", "K"], cache_results=True)
+@triton.jit
+def fp8gemm_wgrad_dual(
+    dy0_input,
+    dy1_input,
+    x_input,
+    weight_grad0,
+    weight_grad1,
+    M,
+    N,
+    K,
+    dy0_stride1,
+    dy1_stride1,
+    x_stride1,
+    dw0_stride1,
+    dw1_stride1,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    # dW0 = dY0.T @ X and dW1 = dY1.T @ X share X's load and online scale.
+    NUM_KBLOCKS = tl.cdiv(K, BLOCK_K)
+
+    pid = tl.program_id(0)
+    row_idx = pid // NUM_KBLOCKS
+    col_idx = pid % NUM_KBLOCKS
+
+    dy0_block_ptr = tl.make_block_ptr(dy0_input, shape=(M,N), strides=(dy0_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    dy1_block_ptr = tl.make_block_ptr(dy1_input, shape=(M,N), strides=(dy1_stride1, 1), offsets=(0, row_idx * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N), order=(1,0))
+    x_block_ptr = tl.make_block_ptr(x_input, shape=(M,K), strides=(x_stride1, 1), offsets=(0, col_idx * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K), order=(1,0))
+
+    acc0 = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    acc1 = tl.zeros((BLOCK_N, BLOCK_K), dtype=tl.float32)
+    for i in tl.range(0, M, BLOCK_M):
+        dy0_block = tl.load(dy0_block_ptr, boundary_check=(1,0), padding_option='zero')
+        dy0_block_scaled, dy0s_block = online_scale(tl.trans(dy0_block))
+        dy1_block = tl.load(dy1_block_ptr, boundary_check=(1,0), padding_option='zero')
+        dy1_block_scaled, dy1s_block = online_scale(tl.trans(dy1_block))
+
+        x_block = tl.load(x_block_ptr, boundary_check=(1,0), padding_option='zero')
+        x_block_scaled, xs_block = online_scale(tl.trans(x_block))
+        x_block_scaled = tl.trans(x_block_scaled)
+
+        acc0 = tl.dot_scaled(dy0_block_scaled, dy0s_block, 'e4m3', x_block_scaled, xs_block, 'e4m3', acc0)
+        acc1 = tl.dot_scaled(dy1_block_scaled, dy1s_block, 'e4m3', x_block_scaled, xs_block, 'e4m3', acc1)
+
+        dy0_block_ptr = tl.advance(dy0_block_ptr, (BLOCK_M, 0))
+        dy1_block_ptr = tl.advance(dy1_block_ptr, (BLOCK_M, 0))
+        x_block_ptr = tl.advance(x_block_ptr, (BLOCK_M, 0))
+
+    o0_block_ptr = tl.make_block_ptr(weight_grad0, shape=(N,K), strides=(dw0_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    o1_block_ptr = tl.make_block_ptr(weight_grad1, shape=(N,K), strides=(dw1_stride1, 1), offsets=(row_idx * BLOCK_N, col_idx * BLOCK_K), block_shape=(BLOCK_N, BLOCK_K), order=(1,0))
+    tl.store(o0_block_ptr, acc0.to(weight_grad0.dtype.element_ty), boundary_check=(1,0))
+    tl.store(o1_block_ptr, acc1.to(weight_grad1.dtype.element_ty), boundary_check=(1,0))
 
 
 @triton.jit
@@ -646,12 +802,111 @@ def launch_fp8_swiglu_backward(
         lambda meta: (triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(K, meta["BLOCK_K"]),)
     ](dgate, dup, gate_weight, gate_scale, up_weight, up_scale, grad_x, M, N, K, dgate.stride(0), dup.stride(0), gate_weight.stride(0), gate_scale.stride(0), up_weight.stride(0), up_scale.stride(0), grad_x.stride(0))
 
-    grad_gate_weight = launch_fp8gemm_weight_grad(dgate, x, out_dtype=torch.float32)
-    grad_up_weight = launch_fp8gemm_weight_grad(dup, x, out_dtype=torch.float32)
+    grad_gate_weight, grad_up_weight = launch_fp8gemm_weight_grad_dual(
+        dgate,
+        dup,
+        x,
+        out_dtype=torch.float32,
+    )
 
     if return_intermediate_grads:
         return grad_x, grad_gate_weight, grad_up_weight, dgate, dup
     return grad_x, grad_gate_weight, grad_up_weight
+
+
+def launch_fp8_down_swiglu_backward(
+    dy: torch.Tensor,
+    hidden: torch.Tensor,
+    gate: torch.Tensor,
+    up: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_scale: torch.Tensor,
+    gate_weight: torch.Tensor,
+    gate_scale: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_scale: torch.Tensor,
+    x: torch.Tensor,
+    return_intermediate_grads: bool = False,
+):
+    M, O = dy.shape
+    M_hidden, H = hidden.shape
+    N_weight, O_weight = down_weight.shape
+
+    assert M_hidden == M
+    assert N_weight == O and O_weight == H
+    assert hidden.dtype == torch.bfloat16
+    assert hidden.stride(1) == 1
+
+    dgate = torch.empty((M, H), dtype=torch.bfloat16, device=dy.device)
+    dup = torch.empty_like(dgate)
+    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(H, meta['BLOCK_K']),)
+    fp8gemm_bwd_swiglu_act[grid](
+        dy,
+        down_weight,
+        down_scale,
+        gate,
+        up,
+        dgate,
+        dup,
+        M,
+        O,
+        H,
+        dy.stride(0),
+        down_weight.stride(0),
+        down_scale.stride(0),
+        gate.stride(0),
+        up.stride(0),
+        dgate.stride(0),
+        dup.stride(0),
+    )
+
+    grad_x = torch.empty((M, x.shape[1]), dtype=torch.bfloat16, device=dy.device)
+    fp8_swiglu_bwd_dx[
+        lambda meta: (
+            triton.cdiv(M, meta['BLOCK_M']) * triton.cdiv(x.shape[1], meta['BLOCK_K']),
+        )
+    ](
+        dgate,
+        dup,
+        gate_weight,
+        gate_scale,
+        up_weight,
+        up_scale,
+        grad_x,
+        M,
+        H,
+        x.shape[1],
+        dgate.stride(0),
+        dup.stride(0),
+        gate_weight.stride(0),
+        gate_scale.stride(0),
+        up_weight.stride(0),
+        up_scale.stride(0),
+        grad_x.stride(0),
+    )
+
+    grad_gate_weight, grad_up_weight = launch_fp8gemm_weight_grad_dual(
+        dgate,
+        dup,
+        x,
+        out_dtype=torch.float32,
+    )
+    grad_down_weight = launch_fp8gemm_weight_grad(
+        dy,
+        hidden,
+        out_dtype=torch.float32,
+    )
+
+    if return_intermediate_grads:
+        return (
+            grad_x,
+            grad_gate_weight,
+            grad_up_weight,
+            grad_down_weight,
+            dgate,
+            dup,
+        )
+    return grad_x, grad_gate_weight, grad_up_weight, grad_down_weight
 
 
 def launch_fp8gemm_backward(dy: torch.Tensor, weight: torch.Tensor, ws: torch.Tensor) -> torch.Tensor:
@@ -682,6 +937,45 @@ def launch_fp8gemm_weight_grad(dy: torch.Tensor, x: torch.Tensor, out_dtype: tor
     fp8gemm_wgrad[lambda meta: (triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']), )](dy, x, weight_grad, M, N, K, dy.stride(0), x.stride(0), weight_grad.stride(0))
 
     return weight_grad
+
+
+def launch_fp8gemm_weight_grad_dual(
+    dy0: torch.Tensor,
+    dy1: torch.Tensor,
+    x: torch.Tensor,
+    out_dtype: torch.dtype = torch.float32,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    M, N = dy0.shape
+    M_x, K = x.shape
+
+    assert dy1.shape == dy0.shape
+    assert M_x == M
+    assert dy0.dtype == torch.bfloat16 and dy1.dtype == torch.bfloat16
+    assert x.dtype == torch.bfloat16
+    assert dy0.stride(1) == 1 and dy1.stride(1) == 1 and x.stride(1) == 1
+    assert out_dtype in (torch.bfloat16, torch.float32)
+
+    weight_grad0 = torch.empty((N, K), dtype=out_dtype, device=dy0.device)
+    weight_grad1 = torch.empty_like(weight_grad0)
+    grid = lambda meta: (
+        triton.cdiv(N, meta['BLOCK_N']) * triton.cdiv(K, meta['BLOCK_K']),
+    )
+    fp8gemm_wgrad_dual[grid](
+        dy0,
+        dy1,
+        x,
+        weight_grad0,
+        weight_grad1,
+        M,
+        N,
+        K,
+        dy0.stride(0),
+        dy1.stride(0),
+        x.stride(0),
+        weight_grad0.stride(0),
+        weight_grad1.stride(0),
+    )
+    return weight_grad0, weight_grad1
 
 
 def check_quantize(w: torch.Tensor, wo: torch.Tensor, ws: torch.Tensor):
