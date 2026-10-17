@@ -2,16 +2,22 @@
 
 The 28x28 image is flattened to 784 features and padded to 800 so every FP8
 GEMM contraction dimension is a multiple of the 32-element quantization block.
-A same-initialization FP32 model consumes identical mini-batches as a control.
+Muon updates the 2-D weight matrices while AdamW updates the biases. A
+same-initialization FP32 model consumes identical mini-batches as a control.
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torchvision.datasets import MNIST
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from fp8_linear import FP8Linear
 from tests.toy_train_fp8_mlp import FP32Linear
@@ -97,6 +103,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer",
+        choices=("muon", "adamw"),
+        default="muon",
+        help="Muon uses AdamW for biases; adamw uses AdamW for every parameter",
+    )
+    parser.add_argument(
+        "--muon-lr",
+        type=float,
+        default=0.02,
+        help="learning rate for 2-D Muon parameters",
+    )
+    parser.add_argument(
+        "--bias-lr",
+        type=float,
+        default=None,
+        help="AdamW learning rate for biases; defaults to --lr",
+    )
+    parser.add_argument("--momentum", type=float, default=0.95)
+    parser.add_argument(
+        "--adjust-lr-fn",
+        choices=("original", "match_rms_adamw"),
+        default="original",
+        help="shape-dependent Muon learning-rate adjustment",
+    )
+    parser.add_argument("--weight-decay", type=float, default=1e-2)
     parser.add_argument("--log-every", type=int, default=100)
     return parser.parse_args()
 
@@ -182,6 +214,67 @@ def make_models(
     )
     control.load_state_dict(fp8_model.state_dict())
     return fp8_model, control
+
+
+def split_parameters(
+    model: nn.Module,
+) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
+    weights = []
+    biases = []
+    for parameter in model.parameters():
+        if parameter.ndim == 2:
+            weights.append(parameter)
+        else:
+            biases.append(parameter)
+    return weights, biases
+
+
+def make_optimizers(
+    model: nn.Module,
+    args: argparse.Namespace,
+) -> list[torch.optim.Optimizer]:
+    if args.optimizer == "adamw":
+        return [
+            torch.optim.AdamW(
+                model.parameters(),
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+            )
+        ]
+
+    weight_parameters, bias_parameters = split_parameters(model)
+    return [
+        torch.optim.Muon(
+            weight_parameters,
+            lr=args.muon_lr if args.muon_lr is not None else args.lr,
+            weight_decay=args.weight_decay,
+            momentum=args.momentum,
+            nesterov=True,
+            adjust_lr_fn=args.adjust_lr_fn,
+        ),
+        torch.optim.AdamW(
+            bias_parameters,
+            lr=args.bias_lr if args.bias_lr is not None else args.lr,
+            weight_decay=args.weight_decay,
+        ),
+    ]
+
+
+def zero_grad(optimizers: list[torch.optim.Optimizer]) -> None:
+    for optimizer in optimizers:
+        optimizer.zero_grad(set_to_none=True)
+
+
+def step_optimizers(
+    optimizers: list[torch.optim.Optimizer],
+    fp8_model: FP8MNISTMLP,
+) -> None:
+    for optimizer in optimizers:
+        optimizer.step()
+    # Weight and bias live in different optimizers, so refresh only after both
+    # have stepped. This also avoids coupling the refresh to a single hook.
+    for layer in fp8_model.fp8_layers():
+        layer.refresh_fp8_weight()
 
 
 def compute_loss(
@@ -272,8 +365,8 @@ def evaluate(
 def train_models(
     fp8_model: FP8MNISTMLP,
     control: FP32MNISTMLP,
-    fp8_optimizer: torch.optim.Optimizer,
-    control_optimizer: torch.optim.Optimizer,
+    fp8_optimizers: list[torch.optim.Optimizer],
+    control_optimizers: list[torch.optim.Optimizer],
     train_x: torch.Tensor,
     train_y: torch.Tensor,
     test_x: torch.Tensor,
@@ -303,13 +396,13 @@ def train_models(
             xb = train_x[indices]
             yb = train_y[indices]
 
-            fp8_optimizer.zero_grad(set_to_none=True)
+            zero_grad(fp8_optimizers)
             fp8_logits = fp8_model(xb).float()
             fp8_loss = F.cross_entropy(fp8_logits, yb)
             if not torch.isfinite(fp8_loss):
                 raise RuntimeError(f"FP8 produced a non-finite loss at step {global_step}")
             fp8_loss.backward()
-            fp8_optimizer.step()
+            step_optimizers(fp8_optimizers, fp8_model)
 
             current = quantized_snapshots(fp8_model)
             for name in snapshots:
@@ -320,11 +413,12 @@ def train_models(
                     refresh_counts[name] += 1
             snapshots = current
 
-            control_optimizer.zero_grad(set_to_none=True)
+            zero_grad(control_optimizers)
             control_logits = control(xb).float()
             control_loss = F.cross_entropy(control_logits, yb)
             control_loss.backward()
-            control_optimizer.step()
+            for optimizer in control_optimizers:
+                optimizer.step()
 
             count = yb.shape[0]
             seen += count
@@ -397,6 +491,7 @@ def main() -> None:
         "task=mnist_mlp",
         f"shape=(M={train_x.shape[0]}, K={train_x.shape[1]}, "
         f"H1={args.hidden1}, H2={args.hidden2}, N=10)",
+        f"optimizer={args.optimizer}",
         f"batch_size={args.batch_size}",
         f"device={torch.cuda.get_device_name(device)}",
     )
@@ -411,24 +506,14 @@ def main() -> None:
     for name, (cosine, relative_l2) in initial_grads.items():
         print(f"  {name:11s} cosine={cosine:.6f} relative_l2={relative_l2:.6f}")
 
-    fp8_optimizer = torch.optim.AdamW(
-        fp8_model.parameters(),
-        lr=args.lr,
-        weight_decay=1e-2,
-    )
-    control_optimizer = torch.optim.AdamW(
-        control.parameters(),
-        lr=args.lr,
-        weight_decay=1e-2,
-    )
-    for layer in fp8_model.fp8_layers():
-        layer.bind_optimizer(fp8_optimizer)
+    fp8_optimizers = make_optimizers(fp8_model, args)
+    control_optimizers = make_optimizers(control, args)
 
     refresh_counts = train_models(
         fp8_model,
         control,
-        fp8_optimizer,
-        control_optimizer,
+        fp8_optimizers,
+        control_optimizers,
         train_x,
         train_y,
         test_x,
