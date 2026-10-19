@@ -1,0 +1,157 @@
+{
+  "cases": [
+    {
+      "shape": [
+        256,
+        512,
+        1024
+      ],
+      "errors_vs_online": [
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        }
+      ],
+      "timings": {
+        "prequantize_False": {
+          "median_ms": 0.028915999457240105,
+          "round_ms": [
+            0.028968000784516335,
+            0.028906000778079033,
+            0.028915999457240105
+          ]
+        },
+        "prequantize_True": {
+          "median_ms": 0.028074000030755997,
+          "round_ms": [
+            0.028074000030755997,
+            0.028074000030755997,
+            0.028074000030755997
+          ]
+        }
+      }
+    },
+    {
+      "shape": [
+        1024,
+        1024,
+        4096
+      ],
+      "errors_vs_online": [
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        }
+      ],
+      "timings": {
+        "prequantize_False": {
+          "median_ms": 0.2789110094308853,
+          "round_ms": [
+            0.2788669914007187,
+            0.2789110094308853,
+            0.27901801466941833
+          ]
+        },
+        "prequantize_True": {
+          "median_ms": 0.32048800587654114,
+          "round_ms": [
+            0.32042399048805237,
+            0.32060399651527405,
+            0.32048800587654114
+          ]
+        }
+      }
+    },
+    {
+      "shape": [
+        2048,
+        2048,
+        8192
+      ],
+      "errors_vs_online": [
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "relative_l2": 0.0,
+          "max_abs": 0.0
+        }
+      ],
+      "timings": {
+        "prequantize_False": {
+          "median_ms": 2.0838160514831543,
+          "round_ms": [
+            2.071784019470215,
+            2.0918800830841064,
+            2.0838160514831543
+          ]
+        },
+        "prequantize_True": {
+          "median_ms": 2.1680400371551514,
+          "round_ms": [
+            2.165287971496582,
+            2.1680400371551514,
+            2.1694459915161133
+          ]
+        }
+      }
+    }
+  ]
+}

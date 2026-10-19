@@ -89,29 +89,37 @@ def test_mlp_fullgraph_dynamic_batch():
 
 
 @pytest.mark.parametrize("fp8_wgrad", [False, True])
-def test_swiglu_fullgraph_forward_backward(fp8_wgrad):
+@pytest.mark.parametrize("bias", [False, True])
+def test_swiglu_fullgraph_forward_backward(fp8_wgrad, bias):
     _reset_dynamo()
     torch.manual_seed(13)
     layer = FP8SwiGLU(
         32,
         64,
         10,
-        bias=True,
+        bias=bias,
         fp8_wgrad=fp8_wgrad,
         device="cuda",
     )
-    x = torch.randn(16, 32, dtype=torch.bfloat16, device="cuda")
+    x = torch.randn(16, 32, dtype=torch.bfloat16, device="cuda", requires_grad=True)
     target = torch.randn(16, 10, dtype=torch.bfloat16, device="cuda")
     compiled = torch.compile(layer, fullgraph=True)
 
     out = compiled(x)
     F.mse_loss(out.float(), target.float()).backward()
-    with torch.no_grad():
-        eager_out = layer(x)
+    targets = (x, *layer.parameters())
+    compiled_grads = [tensor.grad.clone() for tensor in targets]
+    for tensor in targets:
+        tensor.grad = None
+    eager_out = layer(x)
+    F.mse_loss(eager_out.float(), target.float()).backward()
+    for tensor, compiled_grad in zip(targets, compiled_grads):
+        torch.testing.assert_close(tensor.grad, compiled_grad, rtol=0, atol=0)
 
     torch.testing.assert_close(out, eager_out, rtol=0, atol=0)
     assert layer.gate_weight.grad is not None
     assert layer.up_weight.grad is not None
     assert layer.down_proj.master_weight.grad is not None
-    assert layer.down_proj.bias.grad is not None
+    if bias:
+        assert layer.down_proj.bias.grad is not None
     _reset_dynamo()

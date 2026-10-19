@@ -58,6 +58,13 @@ BF16_WGRAD_CONFIGS = [
     triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=3),
     triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=8, num_stages=3),
     triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=8, num_stages=3),
+    # Shortlisted from FP32-output wgrad benchmarks; retain the original
+    # configurations so small and irregular shapes can choose independently.
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=4, num_stages=3),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 128}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 64}, num_warps=4, num_stages=2),
 ]
 
 
@@ -451,7 +458,7 @@ def fp8gemm_bwd(dy_input, weight, weight_scale, out, M, N, K, dy_stride1, w_stri
     tl.store(o_block_ptr, acc.to(out.dtype.element_ty), boundary_check=(1,0))
 
 
-@triton.autotune(configs=DOWN_ACT_CONFIGS, key=["M", "N", "K"])
+@triton.autotune(configs=DOWN_ACT_CONFIGS, key=["M", "N", "K"], cache_results=True)
 @triton.jit
 def fp8gemm_bwd_swiglu_act(
     dy_input,

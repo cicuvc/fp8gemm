@@ -96,6 +96,7 @@ def _fp8_swiglu_bwd(
     down_fp8: torch.Tensor,
     down_scale: torch.Tensor,
     use_fp8_wgrad: bool,
+    has_bias: bool = True,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -123,7 +124,12 @@ def _fp8_swiglu_bwd(
             use_fp8_wgrad=use_fp8_wgrad,
         )
     )
-    grad_bias = grad_output.float().sum(dim=0)
+    # Keep the custom-op output schema tensor-only without launching work when
+    # the layer has no bias. Autograd discards this empty placeholder.
+    grad_bias = (
+        grad_output.sum(dim=0, dtype=torch.float32)
+        if has_bias else torch.empty(0, device=grad_output.device, dtype=torch.float32)
+    )
     return grad_x, grad_gate, grad_up, grad_down, grad_bias
 
 
@@ -141,6 +147,7 @@ def _fp8_swiglu_bwd_fake(
     down_fp8: torch.Tensor,
     down_scale: torch.Tensor,
     use_fp8_wgrad: bool,
+    has_bias: bool = True,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -172,7 +179,7 @@ def _fp8_swiglu_bwd_fake(
             device=x.device,
         ),
         torch.empty(
-            (out_features,),
+            (out_features if has_bias else 0,),
             dtype=torch.float32,
             device=x.device,
         ),
@@ -195,6 +202,9 @@ def _fp8_swiglu_setup_context(ctx, inputs, output):
         use_fp8_wgrad,
     ) = inputs
     _, gate, up, hidden = output
+    # These outputs only carry saved activations; their gradients are unused.
+    ctx.mark_non_differentiable(gate, up, hidden)
+    ctx.set_materialize_grads(False)
     ctx.save_for_backward(
         x,
         gate,
@@ -213,6 +223,8 @@ def _fp8_swiglu_setup_context(ctx, inputs, output):
 
 def _fp8_swiglu_backward(ctx, *grad_outputs):
     grad_output = grad_outputs[0]
+    if grad_output is None:
+        return (None,) * 12
     (
         x,
         gate,
@@ -238,6 +250,7 @@ def _fp8_swiglu_backward(ctx, *grad_outputs):
         down_fp8,
         down_scale,
         ctx.use_fp8_wgrad,
+        ctx.has_bias,
     )
     return (
         grad_x,
