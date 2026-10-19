@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from experiments.post_norm_pair import PostNormPair
+from experiments.post_norm_pair import PostNormPair, PostNormPairTwoCorrections
 
 
 pytestmark = pytest.mark.skipif(
@@ -14,10 +14,11 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("b_output_bf16", [False, True])
-def test_post_norm_pair_backward_matches_reference(b_output_bf16):
+@pytest.mark.parametrize("pair_class", [PostNormPair, PostNormPairTwoCorrections])
+def test_post_norm_pair_backward_matches_reference(b_output_bf16, pair_class):
     torch.manual_seed(90)
     M, D, P, Q = 64, 64, 80, 96
-    pair = PostNormPair(
+    pair = pair_class(
         residual_features=D,
         first_features=P,
         second_input_features=Q,

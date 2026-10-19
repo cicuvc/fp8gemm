@@ -15,6 +15,7 @@ from experiments.flash_norm import (
     launch_flash_norm_wgrad,
     launch_inverse_rms,
     launch_quantize_factored_weight,
+    launch_rms_correction,
 )
 from experiments.post_norm import fp8gemm_post_norm_residual_fwd
 
@@ -174,6 +175,85 @@ def _launch_pair_rms_correction(
         K,
         x.stride(0),
         first_pre_correction_grad.stride(0),
+        second_linear_grad.stride(0),
+        output.stride(0),
+        BLOCK_K=block_k,
+    )
+    return output
+
+
+@triton.jit
+def second_rms_correction_kernel(
+    x,
+    second_linear_grad,
+    elementwise_factor,
+    inverse_rms,
+    output,
+    M,
+    K,
+    x_stride,
+    second_grad_stride,
+    output_stride,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_K)
+    mask = offsets < K
+    x_row = tl.load(
+        x + row * x_stride + offsets,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    second_grad_row = tl.load(
+        second_linear_grad + row * second_grad_stride + offsets,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    factor_row = tl.load(
+        elementwise_factor + offsets,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    inverse_rms_row = tl.load(inverse_rms + row)
+    rms_gradient = tl.sum(
+        x_row * factor_row * second_grad_row,
+        axis=0,
+    )
+    direct_gradient = inverse_rms_row * factor_row * second_grad_row
+    coefficient = (
+        -rms_gradient
+        * inverse_rms_row
+        * inverse_rms_row
+        * inverse_rms_row
+        / K
+    )
+    corrected = direct_gradient + coefficient * x_row
+    tl.store(
+        output + row * output_stride + offsets,
+        corrected.to(tl.bfloat16),
+        mask=mask,
+    )
+
+
+@torch.no_grad()
+def _launch_second_rms_correction(
+    x: torch.Tensor,
+    second_linear_grad: torch.Tensor,
+    elementwise_factor: torch.Tensor,
+    inverse_rms: torch.Tensor,
+) -> torch.Tensor:
+    M, K = x.shape
+    output = torch.empty_like(x)
+    block_k = triton.next_power_of_2(K)
+    second_rms_correction_kernel[(M,)](
+        x,
+        second_linear_grad,
+        elementwise_factor,
+        inverse_rms,
+        output,
+        M,
+        K,
+        x.stride(0),
         second_linear_grad.stride(0),
         output.stride(0),
         BLOCK_K=block_k,
@@ -408,8 +488,119 @@ class _PostNormPairFunction(torch.autograd.Function):
         )
 
 
+class _PostNormPairTwoCorrectionsFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, *args):
+        return _PostNormPairFunction.forward(ctx, *args)
+
+    @staticmethod
+    def backward(ctx, grad_first, grad_second):
+        (
+            x,
+            z,
+            first_weight,
+            second_weight,
+            elementwise_factor,
+            first_weight_fp8,
+            first_weight_scale,
+            second_weight_fp8,
+            second_weight_scale,
+            inverse_rms,
+        ) = ctx.saved_tensors
+        if grad_first is None:
+            grad_first = torch.zeros(
+                (x.shape[0], first_weight.shape[0]),
+                dtype=torch.bfloat16,
+                device=x.device,
+            )
+        else:
+            grad_first = grad_first.contiguous().to(torch.bfloat16)
+        if grad_second is None:
+            grad_second = torch.zeros(
+                (x.shape[0], second_weight.shape[0]),
+                dtype=torch.bfloat16,
+                device=x.device,
+            )
+        else:
+            grad_second = grad_second.contiguous().to(torch.bfloat16)
+
+        first_pre_correction_grad = launch_flash_norm_dx_gemm(
+            grad_first,
+            first_weight_fp8,
+            first_weight_scale,
+            inverse_rms,
+            ctx.b_output_bf16,
+        )
+        first_grad_x = launch_rms_correction(
+            x,
+            first_pre_correction_grad,
+            inverse_rms,
+        )
+        second_grad_x = _launch_second_rms_correction(
+            x,
+            grad_second,
+            elementwise_factor,
+            inverse_rms,
+        )
+        grad_x = first_grad_x + second_grad_x
+
+        first_effective_weight_grad = launch_flash_norm_wgrad(
+            grad_first,
+            x,
+            inverse_rms,
+        )
+        first_weight_grad, first_factor_grad = launch_factor_chain_rule(
+            first_effective_weight_grad,
+            first_weight,
+            elementwise_factor,
+        )
+        second_factor_grad = _launch_second_factor_grad(
+            x,
+            grad_second,
+            inverse_rms,
+        )
+        factor_grad = first_factor_grad + second_factor_grad
+        grad_z = mxtest.launch_fp8gemm_backward(
+            grad_second,
+            second_weight_fp8,
+            second_weight_scale,
+        )
+        second_weight_grad = mxtest.launch_fp8gemm_weight_grad(
+            grad_second,
+            z,
+            out_dtype=torch.float32,
+        )
+        first_bias_grad = (
+            grad_first.float().sum(dim=0)
+            if ctx.has_first_bias
+            else None
+        )
+        second_bias_grad = (
+            grad_second.float().sum(dim=0)
+            if ctx.has_second_bias
+            else None
+        )
+        return (
+            grad_x,
+            grad_z,
+            first_weight_grad,
+            second_weight_grad,
+            factor_grad,
+            None,
+            None,
+            None,
+            None,
+            first_bias_grad,
+            second_bias_grad,
+            None,
+            None,
+        )
+
+
 class PostNormPair(nn.Module):
     """Postnorm branch pair sharing one RMSNorm factor and inverse RMS."""
+
+    _autograd_function = _PostNormPairFunction
 
     def __init__(
         self,
@@ -537,7 +728,7 @@ class PostNormPair(nn.Module):
         if x.dtype != torch.bfloat16 or z.dtype != torch.bfloat16:
             raise TypeError("postnorm pair inputs must be BF16")
         self._sync_if_needed()
-        return _PostNormPairFunction.apply(
+        return self._autograd_function.apply(
             x.contiguous(),
             z.contiguous(),
             self.first_weight,
@@ -552,3 +743,9 @@ class PostNormPair(nn.Module):
             self.eps,
             self.b_output_bf16,
         )
+
+
+class PostNormPairTwoCorrections(PostNormPair):
+    """Postnorm pair applying F1 and F2 RMS corrections separately."""
+
+    _autograd_function = _PostNormPairTwoCorrectionsFunction
