@@ -29,25 +29,30 @@ class GemmLibrary:
         self.lib = ct.CDLL(str(Path(output).resolve() / 'libgemm.so'))
         self.lib.tk_gemm_create.argtypes = [ct.c_void_p] * 3 + [ct.c_int] * 5
         self.lib.tk_gemm_create.restype = ct.c_void_p
+        self.lib.tk_gemm_create_scaled.argtypes = [ct.c_void_p] * 4 + [ct.c_int] * 5
+        self.lib.tk_gemm_create_scaled.restype = ct.c_void_p
         self.lib.tk_gemm_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         self.lib.tk_gemm_launch.restype = ct.c_int
         self.lib.tk_gemm_error.restype = ct.c_char_p
         self.lib.tk_gemm_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_gemm_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
 
-    def plan(self, a, b, config=8, out=None, sms=0):
-        return GemmPlan(self, a, b, config, out, sms)
+    def plan(self, a, b, config=8, out=None, sms=0, scales=None):
+        return GemmPlan(self, a, b, config, out, sms, scales)
 
 
 class GemmPlan:
     """Reusable descriptors for fixed allocations, shapes, and configuration.
 
     A: contiguous BF16 [M,K], B: contiguous E4M3 [N,K], output BF16 [M,N].
-    B has unit block scale. A uses the existing online_scale exponent rule.
+    B has unit block scale unless uint8 E8M0 scales[ceil(N/32),ceil(K/32)]
+    are supplied. Only the producer reads those global metadata bytes;
+    consumers load them from shared memory before releasing their input slot.
+    A uses the existing online_scale exponent rule.
     K/N must be multiples of the selected TMA panel widths (64 always works).
     No autograd registration; inputs/outputs must remain alive until work ends.
     """
-    def __init__(self, owner, a, b, config, out, sms):
+    def __init__(self, owner, a, b, config, out, sms, scales=None):
         if not 0 <= config < len(CONFIGS):
             raise ValueError('Invalid configuration')
         if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[1]:
@@ -62,10 +67,17 @@ class GemmPlan:
             out = torch.empty((m, n), device=a.device, dtype=torch.bfloat16)
         if out.shape != (m, n) or out.dtype != torch.bfloat16 or out.device != a.device or not out.is_contiguous():
             raise ValueError('Invalid output tensor')
-        self.owner, self.a, self.b, self.out = owner, a, b, out
+        if scales is not None and (scales.shape != ((n+31)//32,(k+31)//32) or scales.dtype != torch.uint8
+                                   or scales.device != a.device or not scales.is_contiguous()):
+            raise ValueError('Invalid weight block scales')
+        self.owner, self.a, self.b, self.out, self.scales = owner, a, b, out, scales
         self.handle = None
         with torch.cuda.device(a.device):
-            self.handle = owner.lib.tk_gemm_create(a.data_ptr(), b.data_ptr(), out.data_ptr(), m, n, k, config, sms)
+            if scales is None:
+                self.handle = owner.lib.tk_gemm_create(a.data_ptr(), b.data_ptr(), out.data_ptr(), m, n, k, config, sms)
+            else:
+                self.handle = owner.lib.tk_gemm_create_scaled(a.data_ptr(), b.data_ptr(), scales.data_ptr(),
+                                                             out.data_ptr(), m, n, k, config, sms)
         if not self.handle:
             raise RuntimeError(owner.lib.tk_gemm_error().decode())
         info = (ct.c_int * 7)()

@@ -103,7 +103,17 @@ def assembly(output, cuda):
         ops = Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)', section))
         for prefix in ['UTMALDG', 'UTMASTG', 'LDSM', 'STSM', 'QMMA.SF', 'USETMAXREG']:
             assert any(op.startswith(prefix) for op in ops), (name, prefix)
-        assert not any(op.startswith(('LDG', 'STG', 'LDL', 'STL', 'CALL')) for op in ops), name
+        scaled = 'ELb1E' in name
+        assert not any(op.startswith(('STG', 'LDL', 'STL', 'CALL')) for op in ops), name
+        loads = list(re.finditer(r'\sLDG\.[^;]+;', section))
+        if scaled:
+            # In these emitted kernels, the producer branch precedes the
+            # consumer register allocation. Only the producer may load scales.
+            producer = section.index('USETMAXREG.DEALLOC')
+            consumer = section.index('USETMAXREG.TRY_ALLOC')
+            assert loads and all(producer < load.start() < consumer for load in loads), name
+        else:
+            assert not loads, name
         # Check the generated physical B pairs: both words must come directly
         # from one LDSM destination tuple, with no intervening register MOV.
         # This is a lexical def-use audit of the emitted unrolled instruction
@@ -129,7 +139,7 @@ def assembly(output, cuda):
         assert direct_pairs == qmma_count > 0, (name, direct_pairs, qmma_count)
         result[name] = {'opcodes': dict(ops), 'qmma_instructions': qmma_count,
                         'b_pairs_direct_from_ldsm': direct_pairs}
-    assert len(result) == len(CONFIGS)
+    assert len(result) == 2*len(CONFIGS)
     return result
 
 
