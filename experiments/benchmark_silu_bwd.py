@@ -15,7 +15,12 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from experiments.tk_silu_bwd import OUTPUT, SiluBwdLibrary, build
+from experiments.tk_silu_bwd import (
+    OUTPUT,
+    SiluBwdLibrary,
+    SiluBwdQuantizeLibrary,
+    build,
+)
 
 
 def reference(dy, half_gate, up):
@@ -126,12 +131,36 @@ def performance(lib):
     return rows
 
 
-def sass_audit():
+def quantized_performance():
+    lib = SiluBwdQuantizeLibrary()
+    rows = []
+    for m, n in [(1024, 1024), (1024, 8192), (2048, 16384), (4096, 16384)]:
+        torch.manual_seed(321)
+        dy = torch.randn((m, n), device="cuda", dtype=torch.bfloat16)
+        half_gate = torch.randn((m, n), device="cuda", dtype=torch.bfloat16)
+        up = torch.randn((m, n), device="cuda", dtype=torch.bfloat16)
+        plan = lib.plan(dy, half_gate, up)
+        timing = graph_benchmark(plan)
+        timing["elements"] = m * n
+        timing["bytes"] = m * n * 10
+        timing["effective_gbps"] = timing["bytes"] / (timing["median_us"] * 1e3)
+        timing.update(plan.info)
+        rows.append(timing)
+        print(
+            f"quantized {m}x{n}: {timing['median_us']:.3f} us, "
+            f"{timing['effective_gbps']:.1f} GB/s",
+            flush=True,
+        )
+    return rows
+
+
+def sass_audit(quantized=False):
+    library = "libsilu_bwd_quantize.so" if quantized else "libsilu_bwd.so"
     raw = subprocess.check_output(
-        ["/usr/local/cuda/bin/cuobjdump", "--dump-sass", str(OUTPUT / "libsilu_bwd.so")],
+        ["/usr/local/cuda/bin/cuobjdump", "--dump-sass", str(OUTPUT / library)],
         text=True,
     )
-    (OUTPUT / "kernels.sass").write_text(raw)
+    (OUTPUT / f"{library}.sass").write_text(raw)
     section = raw.split("Function : ")[1]
     instructions = Counter(
         re.findall(
@@ -140,7 +169,10 @@ def sass_audit():
         )
     )
     assert not any(op.startswith(("LDL", "STL")) for op in instructions)
-    for opcode in ["HFMA2.BF16_V2", "HMUL2.BF16_V2", "MUFU.TANH.BF16"]:
+    required = ["HFMA2.BF16_V2", "HMUL2.BF16_V2", "MUFU.TANH.BF16"]
+    if quantized:
+        required.append("REDUX.MAX")
+    for opcode in required:
         assert instructions[opcode] > 0
     return {opcode: count for opcode, count in instructions.items()}
 
@@ -148,6 +180,7 @@ def sass_audit():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--quantized", action="store_true")
     args = parser.parse_args()
     if not args.skip_build:
         build()
@@ -155,24 +188,34 @@ def main():
     result = {
         "gpu": torch.cuda.get_device_name(),
         "torch": torch.__version__,
-        "accuracy": accuracy(lib),
-        "performance": performance(lib),
-        "sass": sass_audit(),
+        "quantized": args.quantized,
+        "sass": sass_audit(args.quantized),
         "method": (
             "Accuracy compares BF16 outputs with an FP64 formula cast to BF16. "
             "Performance uses CUDA graphs, 64 launches per graph, and 7 rounds. "
             "Effective bandwidth counts three BF16 reads and two BF16 writes."
         ),
     }
+    if args.quantized:
+        result["performance"] = quantized_performance()
+    else:
+        result["accuracy"] = accuracy(lib)
+        result["performance"] = performance(lib)
     result["source_sha256"] = {
         path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         for path in [
             "cuda/silu_bwd_elementwise.cu",
+            "cuda/silu_bwd_common.cuh",
+            "cuda/silu_bwd_quantize.cu",
             "experiments/tk_silu_bwd.py",
             "experiments/benchmark_silu_bwd.py",
         ]
     }
-    output = ROOT / "benchmarks/tk_silu_bwd_bf16_rtx5090.json"
+    output = ROOT / (
+        "benchmarks/tk_silu_bwd_quantized_rtx5090.json"
+        if args.quantized
+        else "benchmarks/tk_silu_bwd_bf16_rtx5090.json"
+    )
     output.write_text(json.dumps(result, indent=2) + "\n")
 
 

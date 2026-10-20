@@ -8,7 +8,13 @@ import subprocess
 import pytest
 import torch
 
-from experiments.tk_silu_bwd import OUTPUT, ROOT, SiluBwdLibrary, build
+from experiments.tk_silu_bwd import (
+    OUTPUT,
+    ROOT,
+    SiluBwdLibrary,
+    SiluBwdQuantizeLibrary,
+    build,
+)
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
@@ -18,9 +24,17 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module", autouse=True)
 def compiled():
-    binary = OUTPUT / "libsilu_bwd.so"
-    source = ROOT / "cuda/silu_bwd_elementwise.cu"
-    if not binary.exists() or source.stat().st_mtime > binary.stat().st_mtime:
+    binaries = [OUTPUT / "libsilu_bwd.so", OUTPUT / "libsilu_bwd_quantize.so"]
+    sources = [
+        ROOT / "cuda/silu_bwd_common.cuh",
+        ROOT / "cuda/silu_bwd_elementwise.cu",
+        ROOT / "cuda/silu_bwd_quantize.cu",
+    ]
+    if any(
+        not binary.exists()
+        or any(source.stat().st_mtime > binary.stat().st_mtime for source in sources)
+        for binary in binaries
+    ):
         build()
 
 
@@ -137,6 +151,7 @@ def test_reuse_stream_and_cuda_graph():
     torch.cuda.current_stream().wait_stream(stream)
     torch.testing.assert_close(plan.dgate, baseline_gate, rtol=0, atol=0)
     torch.testing.assert_close(plan.dup, baseline_up, rtol=0, atol=0)
+    torch.cuda.synchronize()
 
 
 def test_codegen_uses_packed_bf16_instructions():
@@ -160,3 +175,123 @@ def test_codegen_uses_packed_bf16_instructions():
     assert instructions["MUFU.TANH.BF16"] >= 8
     assert "LDL" not in " ".join(instructions)
     assert "STL" not in " ".join(instructions)
+
+
+@pytest.mark.parametrize("shape", [(1, 32), (17, 128), (137, 256)])
+def test_quantized_outputs_match_existing_quantizers(shape):
+    from experiments.tk_mxfp8_dgrad import RowQuantizePlan
+    from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
+
+    torch.cuda.synchronize()
+    m, n = shape
+    torch.manual_seed(173)
+    dy = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    half_gate = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    up = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    reference_gate, reference_up = SiluBwdLibrary().plan(dy, half_gate, up)()
+    torch.cuda.synchronize()
+
+    expected = []
+    for reference in [reference_gate, reference_up]:
+        expected_row, expected_row_scale = RowQuantizePlan(reference)()
+        expected_col, expected_col_scale = ColumnQuantizePlan(
+            reference, transpose=True
+        )()
+        torch.cuda.synchronize()
+        expected.append(
+            (expected_row, expected_row_scale, expected_col, expected_col_scale)
+        )
+
+    plan = SiluBwdQuantizeLibrary().plan(dy, half_gate, up)
+    (
+        gate_row,
+        gate_row_scale,
+        up_row,
+        up_row_scale,
+        gate_col,
+        gate_col_scale,
+        up_col,
+        up_col_scale,
+    ) = (output.clone() for output in plan())
+    torch.cuda.synchronize()
+    for branch, outputs, expected_outputs in [
+        (
+            "gate",
+            (gate_row, gate_row_scale, gate_col, gate_col_scale),
+            expected[0],
+        ),
+        (
+            "up",
+            (up_row, up_row_scale, up_col, up_col_scale),
+            expected[1],
+        ),
+    ]:
+        for name, actual, expected_value in zip(
+            ["row", "row_scale", "col", "col_scale"],
+            outputs,
+            expected_outputs,
+        ):
+            if actual.dtype == torch.float8_e4m3fn:
+                actual = actual.view(torch.uint8)
+                expected_value = expected_value.view(torch.uint8)
+            torch.testing.assert_close(
+                actual,
+                expected_value,
+                rtol=0,
+                atol=0,
+                msg=lambda message: f"{branch}.{name}: {message}",
+            )
+
+
+def test_quantized_reuse_and_cuda_graph():
+    shape = (137, 128)
+    torch.manual_seed(117)
+    dy = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    half_gate = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    up = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    plan = SiluBwdQuantizeLibrary().plan(dy, half_gate, up)
+    baseline = [output.clone() for output in plan()]
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        plan()
+    saved_dy = dy.clone()
+    dy.zero_()
+    graph.replay()
+    torch.cuda.synchronize()
+    for output in [
+        plan.gate_row,
+        plan.up_row,
+        plan.gate_col,
+        plan.up_col,
+        plan.gate_row_scale,
+        plan.up_row_scale,
+        plan.gate_col_scale,
+        plan.up_col_scale,
+    ]:
+        assert torch.count_nonzero(output) == 0
+    dy.copy_(saved_dy)
+    graph.replay()
+    for actual, expected in zip(plan(), baseline):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_quantized_codegen():
+    sass = subprocess.check_output(
+        [
+            "/usr/local/cuda/bin/cuobjdump",
+            "--dump-sass",
+            str(OUTPUT / "libsilu_bwd_quantize.so"),
+        ],
+        text=True,
+    )
+    section = sass.split("Function : ")[1]
+    instructions = Counter(
+        re.findall(
+            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
+            section,
+        )
+    )
+    for opcode in ["HFMA2.BF16_V2", "HMUL2.BF16_V2", "MUFU.TANH.BF16", "REDUX.MAX"]:
+        assert instructions[opcode] > 0
+    assert not any(op.startswith(("LDL", "STL")) for op in instructions)

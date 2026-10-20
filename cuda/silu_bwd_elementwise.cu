@@ -6,49 +6,13 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include "silu_bwd_common.cuh"
 
 namespace fp8gemm::silu_bwd {
 static thread_local std::string error;
 
 static void check(cudaError_t status) {
     if(status!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(status));
-}
-
-__device__ __forceinline__ uint32_t tanh_bf16x2(uint32_t x) {
-    uint32_t out;
-    asm("tanh.approx.bf16x2 %0, %1;" : "=r"(out) : "r"(x));
-    return out;
-}
-
-__device__ __forceinline__ uint32_t fma_bf16x2(
-    uint32_t a,uint32_t b,uint32_t c) {
-    uint32_t out;
-    asm("fma.rn.bf16x2 %0, %1, %2, %3;"
-        : "=r"(out) : "r"(a), "r"(b), "r"(c));
-    return out;
-}
-
-__device__ __forceinline__ uint32_t mul_bf16x2(uint32_t a,uint32_t b) {
-    uint32_t out;
-    asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(out) : "r"(a), "r"(b));
-    return out;
-}
-
-struct PairGrad {
-    uint32_t gate,up;
-};
-
-__device__ __forceinline__ PairGrad backward_pair(
-    uint32_t dy,uint32_t half_gate,uint32_t up) {
-    constexpr uint32_t half=0x3f003f00u; // BF16x2 0.5
-    constexpr uint32_t neg_half=0xbf00bf00u;
-    uint32_t tanh=tanh_bf16x2(half_gate);
-    uint32_t a=fma_bf16x2(half_gate,tanh,half_gate); // silu(gate)
-    uint32_t b=fma_bf16x2(neg_half,tanh,half);       // 0.5*(1-tanh)
-    uint32_t c=fma_bf16x2(half,tanh,half);           // sigmoid(gate)
-    uint32_t dsilu=fma_bf16x2(a,b,c);
-    uint32_t up_dsilu=mul_bf16x2(up,dsilu);
-    return {mul_bf16x2(dy,up_dsilu),mul_bf16x2(dy,a)};
 }
 
 __global__ __launch_bounds__(256) void silu_bwd_bf16_kernel(
