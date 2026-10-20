@@ -1,10 +1,11 @@
-"""CUDA linear backward: actual transposes/padding, FP32 dW, and autograd."""
+"""CUDA linear backward: direct W loading/TMA tails, FP32 dW, and autograd."""
 import pytest
 import torch
 import torch.nn.functional as F
 import mxtest
 from fp8_linear import FP8Linear
 from experiments.tk_linear_backward import LinearBackwardPlan
+from experiments.tk_persistent_gemm import GemmLibrary
 from experiments.benchmark_tk_dual_online_gemm import exact_input
 from experiments.benchmark_tk_persistent_gemm import quantized_a
 
@@ -74,6 +75,34 @@ def test_stream_and_graph():
     with torch.cuda.graph(g):p()
     dy.zero_();g.replay()
     for t in (p.dx,p.dw,p.db):assert torch.count_nonzero(t).item()==0
+
+
+@pytest.mark.parametrize('config',[0,1,2,3,4,6,7,8,9])
+def test_direct_ab_tma_tail(config):
+    m,n,k=257,97,256
+    dc=exact_input(m,n,29)
+    wc=exact_input(n,k,17).float()
+    w,ws=mxtest.launch_weight_quantize(wc.cuda())
+    wf=w.cpu().float()*torch.exp2(ws.cpu().float()-127).repeat_interleave(32,0).repeat_interleave(32,1)[:n,:k]
+    ref=(quant_rows(dc).double() @ wf.double()).bfloat16()
+    # B has exactly97 rows, not128. The K64 tile crosses its actual row bound.
+    a=F.pad(dc,(0,128-n)).cuda()
+    out=torch.full((m,k),float('nan'),device='cuda',dtype=torch.bfloat16)
+    p=GemmLibrary().plan_ab(a,w,ws,config,out=out,sms=3)
+    torch.testing.assert_close(p().cpu(),ref,rtol=0,atol=0)
+
+
+@pytest.mark.parametrize('k',[65,96,128,192])
+def test_weight_padding_only_when_needed(k):
+    x=torch.randn(17,k,device='cuda',dtype=torch.bfloat16)
+    dy=torch.randn(17,97,device='cuda',dtype=torch.bfloat16)
+    w,ws=mxtest.launch_weight_quantize(torch.randn(97,k,device='cuda'))
+    p=initialized_plan(dy,x,w,ws)
+    old=initialized_plan(dy,x,w,ws,transpose_weight=True)
+    assert not hasattr(p,'wt') and not hasattr(p,'wst')
+    assert (p.w_direct is w)==(k%32==0)
+    assert p.w_direct.shape[0]==97
+    for a,b in zip(p(),old()):torch.testing.assert_close(a,b,rtol=0,atol=0)
 
 
 @pytest.mark.parametrize('bias',[False,True])

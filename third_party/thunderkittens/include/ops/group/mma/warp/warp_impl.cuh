@@ -18,6 +18,13 @@ struct group<GW>::wmma {
         D &d, const A &a, const B &b, const C &c,
         const mxfp8_scale<A::rows, A::cols> &sa,
         const mxfp8_scale<B::rows, B::cols> &sb);
+
+    template<ducks::rt::row_layout D, ducks::rt::row_layout A,
+             ducks::rt::col_layout B, ducks::rt::row_layout C>
+    __device__ static inline void mma_AB(
+        D &d, const A &a, const B &b, const C &c,
+        const mxfp8_scale<A::rows, A::cols> &sa,
+        const mxfp8_scale<B::cols, B::rows> &sb);
 #endif
 
     __device__ static inline void mma_AB_base(rt_base<float, ducks::rt_layout::row> &d,

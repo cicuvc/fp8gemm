@@ -88,4 +88,36 @@ __device__ inline void group<GW>::wmma::mma_ABt_block_scaled(
         }
     }
 }
+// AB overload: B is a KxN col-layout register tile. Scale metadata remains
+// indexed [N/16][K/32], independent of the shared/global orientation.
+template<int GW>
+template<ducks::rt::row_layout D, ducks::rt::row_layout A,
+         ducks::rt::col_layout B, ducks::rt::row_layout C>
+__device__ inline void group<GW>::wmma::mma_AB(
+    D &d,const A &a,const B &b,const C &c,
+    const kittens::mxfp8_scale<A::rows,A::cols> &sa,
+    const kittens::mxfp8_scale<B::cols,B::rows> &sb) {
+    KITTENS_CHECK_WARP
+    static_assert(D::rows==A::rows && D::cols==B::cols && A::cols==B::rows);
+    static_assert(D::rows==C::rows && D::cols==C::cols);
+#pragma unroll
+    for(int m=0;m<D::height;++m) {
+#pragma unroll
+        for(int n=0;n<D::width;++n) {
+#pragma unroll
+            for(int k=0;k<A::width;++k) {
+                const auto &at=a.tiles[m][k];
+                const auto &bt=b.tiles[k][n];
+                auto &dt=d.tiles[m][n];
+                const auto &ct=k==0?c.tiles[m][n]:dt;
+                kittens::mma16832_block_scaled<0,0,0,0>(
+                    dt.data[0],dt.data[1],at.data[0],at.data[1],at.data[2],at.data[3],
+                    bt.data[0],bt.data[2],ct.data[0],ct.data[1],sa.data[m][k],sb.data[n][k]);
+                kittens::mma16832_block_scaled<0,0,0,1>(
+                    dt.data[2],dt.data[3],at.data[0],at.data[1],at.data[2],at.data[3],
+                    bt.data[1],bt.data[3],ct.data[2],ct.data[3],sa.data[m][k],sb.data[n][k]);
+            }
+        }
+    }
+}
 #endif

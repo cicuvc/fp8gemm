@@ -8,10 +8,10 @@ namespace fp8gemm {
 namespace kt = kittens;
 template<class Tile> using Global = kt::gl<typename Tile::dtype,-1,-1,-1,-1,Tile>;
 
-template<int R,int C,int BK,int Stages> struct Config {
+template<int R,int C,int BK,int Stages,bool DirectB=false> struct Config {
     static_assert(R%16==0 && C%16==0 && BK%32==0 && 4*R<=256);
     using ATile = kt::st_bf<4*R,BK>;
-    using BTile = kt::st_fp8e4m3<C,BK>;
+    using BTile = kt::st_fp8e4m3<DirectB?BK:C,DirectB?C:BK>;
     using OTile = kt::st_bf<4*R,C>;
     struct Packet { ATile a[2]; BTile b; };
     struct Shared { Packet input[Stages]; OTile output[2]; };
@@ -28,10 +28,10 @@ template<int R,int C,int BK,int Stages> struct Config {
     static_assert(smem<=101376, "Configuration exceeds SM120 shared memory");
 };
 
-template<int R,int C,int BK,int Stages,bool HasWeightScale=false>
+template<int R,int C,int BK,int Stages,bool HasWeightScale=false,bool DirectB=false>
 __global__ __launch_bounds__(384,1) void persistent_gemm(
-    const __grid_constant__ typename Config<R,C,BK,Stages>::Args args) {
-    using CF = Config<R,C,BK,Stages>;
+    const __grid_constant__ typename Config<R,C,BK,Stages,DirectB>::Args args) {
+    using CF = Config<R,C,BK,Stages,DirectB>;
     using Shared = typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
@@ -60,7 +60,8 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
                         int lane=threadIdx.x%32;
                         if(lane<ScaleRows*ScaleCols) {
                             int sr=lane/ScaleCols,sc=lane%ScaleCols;
-                            int gr=nc/32+sr,gc=k*ScaleCols+sc;
+                            int gr=DirectB?k*ScaleCols+sc:nc/32+sr;
+                            int gc=DirectB?nc/32+sr:k*ScaleCols+sc;
                             uint32_t e=0;
                             if(gr<args.scale_rows && gc<args.scale_cols)
                                 e=args.weight_scales[size_t(gr)*args.scale_cols+gc];
@@ -72,7 +73,8 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
                         kt::tma::expect_bytes(bar,8*R*BK*2+C*BK);
                         kt::tma::load_async(tile.a[0],args.a,{0,0,mr,k*BK},bar);
                         kt::tma::load_async(tile.a[1],args.a,{0,0,mr+4*R,k*BK},bar);
-                        kt::tma::load_async(tile.b,args.b,{0,0,nc,k*BK},bar);
+                        if constexpr(DirectB) kt::tma::load_async(tile.b,args.b,{0,0,k*BK,nc},bar);
+                        else kt::tma::load_async(tile.b,args.b,{0,0,nc,k*BK},bar);
                     }
                     last = packet.SlotIdx;
                     packet.submitToNextAndTrigger();
@@ -93,11 +95,13 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
                 auto &tile = packet.template get<0>();
                 kt::rt_bf<R,BK> ar;
                 kt::rt_fp8e4m3<R,BK> aq;
-                kt::rt_fp8e4m3<C,BK> br;
+                kt::rt<kt::fp8e4m3,DirectB?BK:C,DirectB?C:BK,
+                    std::conditional_t<DirectB,kt::ducks::rt_layout::col,kt::ducks::rt_layout::row>> br;
                 kt::mxfp8_scale<R,BK> as;
                 kt::mxfp8_scale<C,BK> bs;
                 kt::warpgroup::load(ar,tile.a[group]);
-                kt::warp::load<true>(br,tile.b);
+                if constexpr(DirectB) kt::warp::load(br,tile.b);
+                else kt::warp::load<true>(br,tile.b);
 #pragma unroll
                 for(int n=0;n<C/16;++n)
 #pragma unroll
@@ -110,7 +114,8 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
                 packet.submitToNextAndTrigger();
                 pipe.moveNext();
                 kt::online_quantize_mxfp8(aq,as,ar);
-                kt::warp::wmma::mma_ABt_block_scaled(accum,aq,br,accum,as,bs);
+                if constexpr(DirectB) kt::warp::wmma::mma_AB(accum,aq,br,accum,as,bs);
+                else kt::warp::wmma::mma_ABt_block_scaled(accum,aq,br,accum,as,bs);
             }
             // Each WG owns one output tile. Let its previous TMA store overlap
             // this GEMM, then wait for shared reads before reusing that tile.
@@ -139,23 +144,23 @@ struct PlanBase {
     virtual void launch(cudaStream_t stream) = 0;
     virtual void info(int *data) = 0;
 };
-template<int R,int C,int BK,int S,bool HasWeightScale=false> struct Plan final : PlanBase {
-    using CF=Config<R,C,BK,S>;
+template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false> struct Plan final : PlanBase {
+    using CF=Config<R,C,BK,S,DirectB>;
     typename CF::Args args;
     int grid, regs;
-    Plan(void *a,void *b,void *o,int m,int n,int k,int sms,const uint8_t *scales=nullptr):
+    Plan(void *a,void *b,void *o,int m,int n,int k,int sms,const uint8_t *scales=nullptr,int brows=0,int srows=0,int scols=0):
         args{Global<typename CF::ATile>(static_cast<kt::bf16*>(a),1,1,m,k),
-             Global<typename CF::BTile>(static_cast<kt::fp8e4m3*>(b),1,1,n,k),
+             Global<typename CF::BTile>(static_cast<kt::fp8e4m3*>(b),1,1,DirectB?brows:n,DirectB?n:k),
              Global<typename CF::OTile>(static_cast<kt::bf16*>(o),1,1,m,n),
              (n+C-1)/C,((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,
-             scales,(n+31)/32,(k+31)/32} {
-        if(k%(CF::BTile::swizzle_bytes) || n%(CF::OTile::swizzle_bytes/2))
+             scales,DirectB?srows:(n+31)/32,DirectB?scols:(k+31)/32} {
+        if((DirectB?n:k)%(CF::BTile::swizzle_bytes) || n%(CF::OTile::swizzle_bytes/2))
             throw std::runtime_error("K/N must be aligned to the standard TMA swizzle panel");
         int dev; check(cudaGetDevice(&dev));
         cudaDeviceProp prop; check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0 ? std::min(sms,prop.multiProcessorCount) : prop.multiProcessorCount);
-        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale>));
+        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale,DirectB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale,DirectB>));
         regs=attr.numRegs;
         // 256 consumers*232 + 128 producers*40 need 64512 registers.
         // ptxas accounts for setmaxnreg and supplies 168 initial registers/thread.
@@ -163,7 +168,7 @@ template<int R,int C,int BK,int S,bool HasWeightScale=false> struct Plan final :
         if(attr.localSizeBytes) throw std::runtime_error("Kernel spills to local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_gemm<R,C,BK,S,HasWeightScale><<<grid,384,CF::smem,stream>>>(args);
+        persistent_gemm<R,C,BK,S,HasWeightScale,DirectB><<<grid,384,CF::smem,stream>>>(args);
         check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
@@ -209,3 +214,22 @@ extern "C" int tk_gemm_launch(void *plan,void *stream) {
 }
 extern "C" void tk_gemm_info(void *plan,int *data) {static_cast<fp8gemm::PlanBase*>(plan)->info(data);}
 extern "C" void tk_gemm_destroy(void *plan) {delete static_cast<fp8gemm::PlanBase*>(plan);}
+
+// Direct AB: A[M,K] may include zero-padded K columns, B[brows,N] retains
+// the forward weight orientation. TMA handles reduction-tail rows of B.
+extern "C" void *tk_gemm_create_ab(void *a,void *b,void *scales,void *out,
+    int m,int n,int k,int brows,int srows,int scols,int config,int sms) {
+    using namespace fp8gemm;
+    try {
+        if(m<=0 || n<=0 || k<=0 || brows<=0 || brows>k || srows<=0 || scols<=0 || !a || !b || !scales || !out)
+            throw std::runtime_error("Invalid direct AB dimensions/pointers");
+#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,true,true>(a,b,out,m,n,k,sms,static_cast<uint8_t*>(scales),brows,srows,scols)
+        switch(config) {
+            CFG(0,16,32,32,2);CFG(1,16,64,32,2);CFG(2,16,128,32,2);
+            CFG(3,32,32,32,2);CFG(4,32,64,32,2);CFG(6,64,32,32,2);
+            CFG(7,16,64,64,2);CFG(8,16,128,64,2);CFG(9,32,32,64,2);
+            default:throw std::runtime_error("Unsupported direct AB configuration (C must be >=32)");
+        }
+#undef CFG
+    }catch(const std::exception &e){error=e.what();return nullptr;}
+}

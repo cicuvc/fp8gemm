@@ -8,13 +8,13 @@ namespace ducks = kittens::ducks;
 template <int GW>
 template <bool swap_axis, ducks::rt::all RT, ducks::st::all ST>
 __device__ inline void group<GW>::load(RT &dst, const ST &src) {
-    constexpr int height = (ST::rows / kittens::TILE_ROW_DIM<typename ST::dtype>);
+    constexpr int height = ST::rows / RT::tile_size_row;
     constexpr int warp_height = RT::height;
     static_assert(height % GROUP_WARPS == 0, "Group load / store requires tile height to be a multiple of "
                                              "GROUP_WARPS.");
     static_assert(height % warp_height == 0, "Group load / store requires tile height to be a multiple of "
                                              "the RT height.");
-    static_assert(ST::width == RT::width, "Group load / store requires tile widths to match.");
+    static_assert(ST::cols == RT::cols, "Group load / store requires tile widths to match.");
     int local_warpid;
     if constexpr (GROUP_WARPS % 4 == 0)
         local_warpid = (warpid() / 4 + (warpid() % 4) * (GROUP_WARPS / 4));
@@ -105,6 +105,30 @@ __device__ inline void group<GW>::load(RT &dst, const ST &src) {
                 dst.tiles[i][j].data[1] = base_types::convertor<T2, U2>::convert(tmp[1]);
                 dst.tiles[i][j].data[2] = base_types::convertor<T2, U2>::convert(tmp[2]);
                 dst.tiles[i][j].data[3] = base_types::convertor<T2, U2>::convert(tmp[3]);
+            } else if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::col> &&
+                                 sizeof(typename ST::dtype) == 1) {
+                static_assert(!swap_axis, "FP8 col-layout load uses the default axis mapping");
+#if defined(KITTENS_FEATURE_MMA_BLOCK_SCALE)
+                // Two K16 x N16 matrices, transposed by LDSM into FP8x4.
+                // Address providers are the 32 rows of the K32 x N16 tile.
+                // Unlike m8n8.x4, each matrix produces two N8 fragments:
+                // [Klo/Nlo, Klo/Nhi, Khi/Nlo, Khi/Nhi]. Swapping address
+                // providers 8..15 and 16..23 permutes K within the words;
+                // it cannot make the QMMA B pairs (0,2)/(1,3) adjacent.
+                int r=(local_warpid*warp_height+i)*32+warp_laneid;
+                int c=j*16;
+                uint32_t addr=src.idx(shared_addr,{r,c});
+                auto &d=dst.tiles[i][j].data;
+                asm volatile(
+                    "ldmatrix.sync.aligned.m16n16.x2.trans.shared::cta.b8 {%0,%1,%2,%3}, [%4];"
+                    : "=r"(*reinterpret_cast<uint32_t*>(&d[0])),
+                      "=r"(*reinterpret_cast<uint32_t*>(&d[1])),
+                      "=r"(*reinterpret_cast<uint32_t*>(&d[2])),
+                      "=r"(*reinterpret_cast<uint32_t*>(&d[3]))
+                    : "r"(addr));
+#else
+                static_assert(sizeof(RT)==0, "FP8 col-layout load requires SM120 support");
+#endif
             } else if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::row> &&
                                  sizeof(typename ST::dtype) == 4) {
                 // handle the row-major layout for 32-bit types

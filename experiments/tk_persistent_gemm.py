@@ -36,9 +36,66 @@ class GemmLibrary:
         self.lib.tk_gemm_error.restype = ct.c_char_p
         self.lib.tk_gemm_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_gemm_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
+        if hasattr(self.lib, 'tk_gemm_create_ab'):
+            self.lib.tk_gemm_create_ab.argtypes = [ct.c_void_p]*4+[ct.c_int]*8
+            self.lib.tk_gemm_create_ab.restype = ct.c_void_p
 
     def plan(self, a, b, config=8, out=None, sms=0, scales=None):
         return GemmPlan(self, a, b, config, out, sms, scales)
+
+    def plan_ab(self, a, b, scales, config=8, out=None, sms=0):
+        return GemmABPlan(self, a, b, scales, config, out, sms)
+
+
+class GemmABPlan:
+    """A[M,Kp] @ B[K,N], FP8 B in its original row-major global layout.
+
+    A is BF16 and quantized online. B is E4M3 with 32x32 block scales.
+    K<=Kp: TMA zero-fills missing B rows without a padded B allocation.
+    A's contiguous row width is a multiple64; B/output width must align to
+    the selected shared swizzle panel (32/64/128 elements for C32/64/128).
+    Scale rows/columns may cover less than padded B, with missing blocks zero.
+    """
+    def __init__(self, owner, a, b, scales, config, out, sms):
+        self.handle=None
+        if config not in [0,1,2,3,4,6,7,8,9] or a.ndim!=2 or b.ndim!=2:
+            raise ValueError('Invalid AB configuration or shapes')
+        m,k=a.shape;bk,n=b.shape
+        c=CONFIGS[config][1]
+        if min(m,k,bk,n)<=0 or bk>k or k%64 or n%c:
+            raise ValueError('A width must align64; B/output width must align to C')
+        if a.dtype!=torch.bfloat16 or b.dtype!=torch.float8_e4m3fn:
+            raise ValueError('Expected BF16 A and E4M3 B')
+        if (not a.is_cuda or b.device!=a.device or scales.device!=a.device or
+                not all(t.is_contiguous() for t in [a,b,scales])):
+            raise ValueError('Expected contiguous tensors on one CUDA device')
+        if (scales.dtype!=torch.uint8 or scales.ndim!=2 or scales.shape[0]!=(bk+31)//32
+                or not 0<scales.shape[1]<=(n+31)//32):
+            raise ValueError('Invalid 32x32 scale grid')
+        if out is None:out=torch.empty((m,n),device=a.device,dtype=torch.bfloat16)
+        if out.shape!=(m,n) or out.dtype!=torch.bfloat16 or out.device!=a.device or not out.is_contiguous():
+            raise ValueError('Invalid output')
+        if any(t.data_ptr()%16 for t in [a,b,out]):raise ValueError('TMA pointers must align16')
+        lo=out.data_ptr();hi=lo+out.numel()*out.element_size()
+        if any(lo<t.data_ptr()+t.numel()*t.element_size() and t.data_ptr()<hi for t in [a,b,scales]):
+            raise ValueError('Output overlaps inputs')
+        self.owner,self.a,self.b,self.scales,self.out=owner,a,b,scales,out
+        with torch.cuda.device(a.device):
+            self.handle=owner.lib.tk_gemm_create_ab(a.data_ptr(),b.data_ptr(),scales.data_ptr(),out.data_ptr(),
+                m,n,k,bk,*scales.shape,config,sms)
+        if not self.handle:raise RuntimeError(owner.lib.tk_gemm_error().decode())
+        info=(ct.c_int*7)();owner.lib.tk_gemm_info(self.handle,info)
+        self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid'],info))
+        self.info['direct_b']=True
+
+    def __call__(self):
+        with torch.cuda.device(self.a.device):
+            if self.owner.lib.tk_gemm_launch(self.handle,torch.cuda.current_stream(self.a.device).cuda_stream):
+                raise RuntimeError(self.owner.lib.tk_gemm_error().decode())
+        return self.out
+
+    def __del__(self):
+        if getattr(self,'handle',None):self.owner.lib.tk_gemm_destroy(self.handle);self.handle=None
 
 
 class GemmPlan:

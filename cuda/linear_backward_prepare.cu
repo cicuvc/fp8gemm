@@ -69,6 +69,19 @@ __global__ void crop(const T* src,T* dst,int rows,int cols,int stride) {
     if(i<int64_t(rows)*cols)dst[i]=src[(i/cols)*stride+i%cols];
 }
 
+__global__ void pad_weight_rows(const uint8_t* src,uint8_t* dst,int n,int k,int stride) {
+    int64_t i=int64_t(blockIdx.x)*blockDim.x+threadIdx.x;
+    if(i<int64_t(n)*stride) {
+        int c=i%stride;
+        dst[i]=c<k?src[(i/stride)*k+c]:0;
+    }
+}
+
+extern "C" int linear_pad_weight(void* w,void* padded,int n,int k,int stride,void* stream) {
+    pad_weight_rows<<<(int64_t(n)*stride+255)/256,256,0,static_cast<cudaStream_t>(stream)>>>(
+        static_cast<uint8_t*>(w),static_cast<uint8_t*>(padded),n,k,stride);
+    return int(cudaGetLastError());
+}
 extern "C" int linear_prepare_dy(void* src,void* dy,void* dyt,void* partial,
     int m,int n,int mp,int np,int64_t s0,int64_t s1,int bias,void* stream) {
     dim3 grid(np/32,mp/32),block(32,8);
@@ -86,9 +99,9 @@ extern "C" int linear_transpose_weight(void* w,void* s,void* wt,void* st,
     return int(cudaGetLastError());
 }
 extern "C" int linear_finish(void* dxp,void* dwp,void* partial,void* dx,void* dw,void* db,
-    int m,int n,int k,int mp,int np,int kp,int bias,void* stream) {
+    int m,int n,int k,int mp,int np,int kp,int dx_stride,int bias,void* stream) {
     auto s=static_cast<cudaStream_t>(stream);
-    if(dxp!=dx)crop<<<(int64_t(m)*k+255)/256,256,0,s>>>(static_cast<__nv_bfloat16*>(dxp),static_cast<__nv_bfloat16*>(dx),m,k,kp);
+    if(dxp!=dx)crop<<<(int64_t(m)*k+255)/256,256,0,s>>>(static_cast<__nv_bfloat16*>(dxp),static_cast<__nv_bfloat16*>(dx),m,k,dx_stride);
     if(dwp!=dw)crop<<<(int64_t(n)*k+255)/256,256,0,s>>>(static_cast<float*>(dwp),static_cast<float*>(dw),n,k,kp);
     if(bias)bias_reduce<<<(n+255)/256,256,0,s>>>(static_cast<float*>(partial),static_cast<float*>(db),n,np,mp/32);
     return int(cudaGetLastError());

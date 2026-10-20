@@ -103,7 +103,8 @@ def assembly(output, cuda):
         ops = Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)', section))
         for prefix in ['UTMALDG', 'UTMASTG', 'LDSM', 'STSM', 'QMMA.SF', 'USETMAXREG']:
             assert any(op.startswith(prefix) for op in ops), (name, prefix)
-        scaled = 'ELb1E' in name
+        scaled = bool(re.search(r'ELb1ELb[01]E', name))
+        direct_ab = 'ELb1ELb1E' in name
         assert not any(op.startswith(('STG', 'LDL', 'STL', 'CALL')) for op in ops), name
         loads = list(re.finditer(r'\sLDG\.[^;]+;', section))
         if scaled:
@@ -114,8 +115,9 @@ def assembly(output, cuda):
             assert loads and all(producer < load.start() < consumer for load in loads), name
         else:
             assert not loads, name
-        # Check the generated physical B pairs: both words must come directly
-        # from one LDSM destination tuple, with no intervening register MOV.
+        # Check physical B pairs. ABt must feed QMMA directly from one LDSM
+        # tuple. Direct AB uses native byte-transposing LDSM, whose fixed N8
+        # output grouping requires register MOVs to form each K32 B operand.
         # This is a lexical def-use audit of the emitted unrolled instruction
         # sequence, not a general SASS control-flow analyzer.
         definitions, qmma_count, direct_pairs = {}, 0, 0
@@ -131,15 +133,20 @@ def assembly(output, cuda):
                 qmma_count += 1
                 if all(o and o[0] == 'LDSM' for o in origins) and origins[0][1] == origins[1][1]:
                     direct_pairs += 1
-            if re.fullmatch(r'R\d+', operands[0].strip()):
-                base = int(operands[0].strip()[1:])
-                count = 4 if op.startswith(('LDSM', 'QMMA')) else 2 if '.64' in op else 1
+            dest = operands[1].strip() if op.startswith('SHFL') else operands[0].strip()
+            if re.fullmatch(r'R\d+', dest):
+                base = int(dest[1:])
+                # LDSM.8.MT1616.2 also writes four registers (.2 counts matrices).
+                count = (4 if op.startswith(('LDSM', 'QMMA')) or '.128' in op else
+                         2 if '.64' in op or op.startswith(('IMAD.WIDE', 'LEA.WIDE')) else 1)
                 for i in range(count):
                     definitions[base+i] = ('LDSM' if op.startswith('LDSM') else op, pc)
-        assert direct_pairs == qmma_count > 0, (name, direct_pairs, qmma_count)
+        assert qmma_count > 0
+        if not direct_ab:
+            assert direct_pairs == qmma_count, (name, direct_pairs, qmma_count)
         result[name] = {'opcodes': dict(ops), 'qmma_instructions': qmma_count,
-                        'b_pairs_direct_from_ldsm': direct_pairs}
-    assert len(result) == 2*len(CONFIGS)
+                        'b_pairs_direct_from_ldsm': direct_pairs, 'direct_ab': direct_ab}
+    assert len(result) == 3*len(CONFIGS)-1  # C16 has no direct-AB variant.
     return result
 
 

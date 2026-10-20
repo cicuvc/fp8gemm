@@ -3,7 +3,9 @@
 The two GEMMs and layout/bias kernels are CUDA. The standalone transpose +
 row/K32 activation quantizer uses Triton, as selected by the prior benchmark.
 Forward weights retain their original 32x32 scales for dX. No input activation
-cache is required. All padding/transposes are included in each backward call.
+cache is required. dX reads the original weight orientation with a col-layout
+register tile. Only an incompatible weight row stride needs a non-transposing
+row-padding copy. All required preparation is included in each backward call.
 """
 import ctypes as ct
 from functools import lru_cache
@@ -14,7 +16,7 @@ import torch
 import triton
 import triton.language as tl
 import mxtest
-from experiments.tk_persistent_gemm import ROOT, FLAGS, GemmLibrary, build as build_gemm, DEFAULT_OUTPUT as GEMM_DIR
+from experiments.tk_persistent_gemm import ROOT, FLAGS, CONFIGS as GEMM_CONFIGS, GemmLibrary, build as build_gemm, DEFAULT_OUTPUT as GEMM_DIR
 from experiments.tk_dual_online_gemm import DualOnlineLibrary, build as build_dual, DEFAULT_OUTPUT as DUAL_DIR
 
 OUTPUT = ROOT/'runs/tk_linear_backward'
@@ -33,14 +35,18 @@ def libraries():
     # Explicit warm-up before CUDA graph capture also compiles missing binaries.
     if torch.cuda.is_current_stream_capturing():
         raise RuntimeError('Warm up the CUDA backward once before CUDA graph capture')
-    if not (GEMM_DIR/'libgemm.so').exists():build_gemm()
-    if not (DUAL_DIR/'libdual.so').exists():build_dual()
-    if not (OUTPUT/'libprepare.so').exists():build()
+    headers=list((ROOT/'third_party/thunderkittens/include').rglob('*.cuh'))
+    def stale(binary,sources):
+        return not binary.exists() or any(s.stat().st_mtime>binary.stat().st_mtime for s in sources)
+    if stale(GEMM_DIR/'libgemm.so',[ROOT/'cuda/persistent_fp8_gemm.cu',*headers]):build_gemm()
+    if stale(DUAL_DIR/'libdual.so',[ROOT/'cuda/persistent_dual_online_gemm.cu',*headers]):build_dual()
+    if stale(OUTPUT/'libprepare.so',[ROOT/'cuda/linear_backward_prepare.cu']):build()
     lib=ct.CDLL(str(OUTPUT/'libprepare.so'))
     lib.linear_prepare_dy.argtypes=[ct.c_void_p]*4+[ct.c_int]*4+[ct.c_int64]*2+[ct.c_int,ct.c_void_p]
     lib.linear_transpose_weight.argtypes=[ct.c_void_p]*4+[ct.c_int]*4+[ct.c_void_p]
-    lib.linear_finish.argtypes=[ct.c_void_p]*6+[ct.c_int]*7+[ct.c_void_p]
-    for name in ['linear_prepare_dy','linear_transpose_weight','linear_finish']:
+    lib.linear_pad_weight.argtypes=[ct.c_void_p]*2+[ct.c_int]*3+[ct.c_void_p]
+    lib.linear_finish.argtypes=[ct.c_void_p]*6+[ct.c_int]*8+[ct.c_void_p]
+    for name in ['linear_prepare_dy','linear_transpose_weight','linear_pad_weight','linear_finish']:
         getattr(lib,name).restype=ct.c_int
     return lib,GemmLibrary(),DualOnlineLibrary()
 
@@ -67,9 +73,10 @@ class LinearBackwardPlan:
     Positive M,N,K, CUDA BF16 x/dy, contiguous E4M3 weight[N,K] and uint8
     block scales[ceil(N/32),ceil(K/32)]. Strided x/dy are accepted. SM120 only.
     Returns BF16 dX, FP32 dW, and FP32 db (empty when bias=False).
+    transpose_weight=True retains the previous dX path for paired measurements.
     Keep the plan alive until its GPU work finishes, including graph replay.
     """
-    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None):
+    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None,*,transpose_weight=False):
         if x.ndim!=2 or dy.ndim!=2 or w.ndim!=2 or dy.shape[0]!=x.shape[0] or w.shape!=(dy.shape[1],x.shape[1]):
             raise ValueError('Expected x[M,K], dy[M,N], weight[N,K]')
         m,k=x.shape;n=dy.shape[1]
@@ -84,36 +91,54 @@ class LinearBackwardPlan:
         self.m,self.n,self.k=m,n,k
         self.mp,self.np,self.kp=mp,np,kp=tuple((v+63)//64*64 for v in (m,n,k))
         self.bias=bool(bias)
+        self.transpose_weight=transpose_weight
         def empty(shape,dtype):return torch.empty(shape,device=x.device,dtype=dtype)
         self.dyp=empty((m,np),torch.bfloat16)
         self.dyt=empty((np,mp),torch.bfloat16)
-        self.wt=empty((kp,np),torch.float8_e4m3fn)
-        self.wst=empty((kp//32,np//32),torch.uint8)
+        if transpose_weight:
+            self.wt=empty((kp,np),torch.float8_e4m3fn)
+            self.wst=empty((kp//32,np//32),torch.uint8)
+            self.dx_stride=kp
+        else:
+            self.dx_stride=(k+31)//32*32
+            self.w_direct=w if k==self.dx_stride else empty((n,self.dx_stride),torch.float8_e4m3fn)
         self.xq=empty((kp,mp),torch.float8_e4m3fn)
         self.xs=empty((kp,mp//32),torch.uint8)
         self.partial=empty((mp//32,np) if bias else (0,),torch.float32)
         self.dx=empty((m,k),torch.bfloat16)
         self.dw=empty((n,k),torch.float32)
         self.db=empty((n,) if bias else (0,),torch.float32)
-        self.dxp=self.dx if k==kp else empty((m,kp),torch.bfloat16)
+        self.dxp=self.dx if k==self.dx_stride else empty((m,self.dx_stride),torch.bfloat16)
         self.dwp=self.dw if (n,k)==(np,kp) else empty((np,kp),torch.float32)
         with torch.cuda.device(x.device):self.lib,g,d=libraries()
         # Conservative defaults from the existing tile sweeps; no timing inside autograd.
-        dx_config=(7 if m<=256 else 8) if dx_config is None else dx_config
+        if dx_config is None:
+            dx_config=7 if m<=256 else 8
+            if not transpose_weight and self.dx_stride%GEMM_CONFIGS[dx_config][1]:
+                dx_config=7 if self.dx_stride%64==0 else 0
         dw_config=(0 if np<=256 and kp<=2048 else 3) if dw_config is None else dw_config
         if dw_config==7 and mp%128:raise ValueError('dw config7 requires padded batch divisible by128')
-        self.dx_plan=g.plan(self.dyp,self.wt,dx_config,out=self.dxp,scales=self.wst)
+        if transpose_weight:
+            self.dx_plan=g.plan(self.dyp,self.wt,dx_config,out=self.dxp,scales=self.wst)
+        else:
+            self.dx_plan=g.plan_ab(self.dyp,self.w_direct,ws,dx_config,out=self.dxp)
         self.dw_plan=d.plan(self.dyt,self.xq,dw_config,out=self.dwp,output_dtype=torch.float32,b_scales=self.xs)
         self.info={'shape_mnk':[m,n,k],'padded_mnk':[mp,np,kp], 'dx':self.dx_plan.info,'dw':self.dw_plan.info,
-                   'bias':self.bias,'weight_transpose_each_call':True}
+                   'bias':self.bias,'weight_transpose_each_call':transpose_weight,
+                   'weight_row_padding':not transpose_weight and k!=self.dx_stride,
+                   'weight_row_stride':self.dx_stride}
 
     def prepare_dy(self):
         _check(self.lib.linear_prepare_dy(self.dy.data_ptr(),self.dyp.data_ptr(),self.dyt.data_ptr(),self.partial.data_ptr(),
             self.m,self.n,self.mp,self.np,*self.dy.stride(),int(self.bias),torch.cuda.current_stream(self.x.device).cuda_stream))
 
     def prepare_weight(self):
-        _check(self.lib.linear_transpose_weight(self.w.data_ptr(),self.ws.data_ptr(),self.wt.data_ptr(),self.wst.data_ptr(),
-            self.n,self.k,self.np,self.kp,torch.cuda.current_stream(self.x.device).cuda_stream))
+        stream=torch.cuda.current_stream(self.x.device).cuda_stream
+        if self.transpose_weight:
+            _check(self.lib.linear_transpose_weight(self.w.data_ptr(),self.ws.data_ptr(),self.wt.data_ptr(),self.wst.data_ptr(),
+                self.n,self.k,self.np,self.kp,stream))
+        elif self.w_direct is not self.w:
+            _check(self.lib.linear_pad_weight(self.w.data_ptr(),self.w_direct.data_ptr(),self.n,self.k,self.dx_stride,stream))
 
     def quantize_x(self):
         _quantize_xt[(self.mp//64,self.kp//64)](self.x,self.xq,self.xs,self.m,self.k,self.mp,*self.x.stride(),num_warps=4)
@@ -121,7 +146,7 @@ class LinearBackwardPlan:
     def finish(self):
         _check(self.lib.linear_finish(self.dxp.data_ptr(),self.dwp.data_ptr(),self.partial.data_ptr(),
             self.dx.data_ptr(),self.dw.data_ptr(),self.db.data_ptr(),self.m,self.n,self.k,self.mp,self.np,self.kp,
-            int(self.bias),torch.cuda.current_stream(self.x.device).cuda_stream))
+            self.dx_stride,int(self.bias),torch.cuda.current_stream(self.x.device).cuda_stream))
 
     def __call__(self):
         with torch.cuda.device(self.x.device):

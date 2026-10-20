@@ -47,8 +47,11 @@ struct rt_base {
                   "rt_base was provided an unsupported type.");
 #endif
 
-    static constexpr int tile_size_row = kittens::TILE_ROW_DIM<T>; // < Tile size is a constant 16 for everyone
-    static constexpr int tile_size_col = kittens::TILE_COL_DIM<T>;
+    // FP8 MMA B has K32 x N16, the transpose of the row-layout M16 x K32
+    // base tile. BF16/FP32 base tiles remain 16x16 in either layout.
+    static constexpr bool fp8_col = sizeof(T)==1 && std::is_same_v<layout,ducks::rt_layout::col>;
+    static constexpr int tile_size_row = fp8_col ? kittens::TILE_COL_DIM<T> : kittens::TILE_ROW_DIM<T>;
+    static constexpr int tile_size_col = fp8_col ? kittens::TILE_ROW_DIM<T> : kittens::TILE_COL_DIM<T>;
     static constexpr int rows = tile_size_row;                    ///< Number of rows.
     static constexpr int cols = tile_size_col;                    ///< Number of cols.
     static constexpr int num_elements = rows * cols;              // 256 (64 for fp8e4m3)
