@@ -1,0 +1,20 @@
+(256, 2048, 512) bf16 candidates 8 best bf16_2 4.780000075697899
+(256, 2048, 512) fp8_tensor candidates 8 best fp8_tensor_1 3.894000081345439
+(256, 2048, 512) mxfp8 candidates 1 best mxfp8_0 7.470000069588423
+(256, 2048, 512) {'lt_bf16_2': 4.541, 'lt_bf16_0': 4.765, 'torch_bf16': 4.765, 'lt_bf16_1': 4.571, 'tk_online_a': 6.62, 'lt_fp8_tensor_0': 3.703, 'mx_quantize_only': 1.212, 'lt_mxfp8_0': 7.293, 'lt_fp8_tensor_1': 3.701, 'mx_quantize_plus_gemm': 8.477, 'lt_fp8_tensor_2': 3.77}
+(1024, 8192, 1024) bf16 candidates 5 best bf16_0 52.333999425172806
+(1024, 8192, 1024) fp8_tensor candidates 8 best fp8_tensor_1 28.67400087416172
+(1024, 8192, 1024) mxfp8 candidates 1 best mxfp8_0 31.03400021791458
+(1024, 8192, 1024) {'lt_bf16_3': 56.398, 'lt_bf16_0': 51.763, 'torch_bf16': 51.789, 'lt_bf16_4': 56.982, 'tk_online_a': 38.802, 'lt_fp8_tensor_0': 27.64, 'mx_quantize_only': 1.553, 'lt_mxfp8_0': 29.905, 'lt_fp8_tensor_1': 27.649, 'mx_quantize_plus_gemm': 31.397, 'lt_fp8_tensor_5': 32.832}
+(2048, 16384, 2048) bf16 candidates 5 best bf16_2 374.65399503707886
+(2048, 16384, 2048) fp8_tensor candidates 8 best fp8_tensor_2 193.50199401378632
+(2048, 16384, 2048) mxfp8 candidates 1 best mxfp8_0 206.07000589370728
+(2048, 16384, 2048) {'lt_bf16_2': 379.007, 'lt_bf16_0': 378.196, 'torch_bf16': 378.193, 'lt_bf16_1': 376.739, 'tk_online_a': 285.056, 'lt_fp8_tensor_0': 205.415, 'lt_mxfp8_0': 205.777, 'lt_fp8_tensor_1': 205.481, 'lt_fp8_tensor_2': 196.867, 'mx_quantize_only': 2.715, 'lt_fp8_tensor_3': 196.932, 'mx_quantize_plus_gemm': 208.593}
+(4096, 4096, 4096) bf16 candidates 5 best bf16_0 353.657990694046
+(4096, 4096, 4096) fp8_tensor candidates 8 best fp8_tensor_0 189.80200588703156
+(4096, 4096, 4096) mxfp8 candidates 1 best mxfp8_0 205.13199269771576
+(4096, 4096, 4096) {'lt_bf16_1': 357.868, 'lt_bf16_0': 355.767, 'torch_bf16': 355.764, 'lt_bf16_2': 375.113, 'tk_online_a': 294.004, 'lt_fp8_tensor_0': 190.094, 'mx_quantize_only': 7.881, 'lt_mxfp8_0': 207.493, 'lt_fp8_tensor_1': 190.219, 'mx_quantize_plus_gemm': 216.377, 'lt_fp8_tensor_2': 195.123}
+(8192, 8192, 4096) bf16 candidates 5 best bf16_1 1372.9939460754395
+(8192, 8192, 4096) fp8_tensor candidates 8 best fp8_tensor_1 730.9499979019165
+(8192, 8192, 4096) mxfp8 candidates 1 best mxfp8_0 794.5380210876465
+(8192, 8192, 4096) {'lt_bf16_1': 1379.703, 'lt_bf16_0': 1411.726, 'torch_bf16': 1411.824, 'lt_bf16_2': 1455.896, 'tk_online_a': 1137.202, 'lt_fp8_tensor_0': 746.065, 'mx_quantize_only': 14.434, 'lt_mxfp8_0': 796.607, 'lt_fp8_tensor_1': 738.083, 'mx_quantize_plus_gemm': 853.13, 'lt_fp8_tensor_2': 760.122}

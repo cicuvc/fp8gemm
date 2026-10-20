@@ -1,0 +1,15 @@
+(256, 2048, 512): 10 variants validated
+(256, 2048, 512): leading ['old_c7', 'base_c7_g1', 'base_c7_g2', 'pref_c7_g1', 'pref_c7_g2', 'old_c8'], retesting 6
+(256, 2048, 512): old=6.729us, best=old_c7 6.729us (1.000x)
+(1024, 8192, 1024): 18 variants validated
+(1024, 8192, 1024): leading ['base_c8_g1', 'old_c8', 'base_c8_g8', 'base_c8_g2', 'base_c8_g4', 'pref_c8_g1'], retesting 9
+(1024, 8192, 1024): old=39.429us, best=old_c8 39.429us (1.000x)
+(2048, 16384, 2048): 38 variants validated
+(2048, 16384, 2048): leading ['old_c8', 'base_c8_g1', 'base_c8_g2', 'base_c8_g8', 'base_c8_g4', 'base_c8_g12'], retesting 11
+(2048, 16384, 2048): old=286.095us, best=old_c8 286.095us (1.000x)
+(4096, 4096, 4096): 54 variants validated
+(4096, 4096, 4096): leading ['old_c8', 'base_c8_g12', 'base_c8_g18', 'base_c8_g14', 'base_c8_g32', 'base_c8_g1'], retesting 11
+(4096, 4096, 4096): old=296.324us, best=base_c8_g12 295.833us (1.001x)
+(8192, 8192, 4096): 58 variants validated
+(8192, 8192, 4096): leading ['base_c8_g1', 'base_c8_g14', 'old_c8', 'base_c8_g2', 'base_c8_g8', 'base_c8_g10'], retesting 11
+(8192, 8192, 4096): old=1146.588us, best=old_c8 1146.588us (1.000x)

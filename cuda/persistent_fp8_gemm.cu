@@ -8,6 +8,13 @@ namespace fp8gemm {
 namespace kt = kittens;
 template<class Tile> using Global = kt::gl<typename Tile::dtype,-1,-1,-1,-1,Tile>;
 
+__device__ __forceinline__ int2 forward_raster_tile(int task,int ntiles,int mtiles,int group_m) {
+    if(group_m==1)return make_int2(task/ntiles,task%ntiles);
+    int span=group_m*ntiles,first=(task/span)*group_m;
+    int rows=min(group_m,mtiles-first),local=task%span;
+    return make_int2(first+local%rows,local/rows);
+}
+
 template<int R,int C,int BK,int Stages,bool DirectB=false> struct Config {
     static_assert(R%16==0 && C%16==0 && BK%32==0 && 4*R<=256);
     using ATile = kt::st_bf<4*R,BK>;
@@ -22,16 +29,18 @@ template<int R,int C,int BK,int Stages,bool DirectB=false> struct Config {
         int ntiles, total, ktiles;
         const uint8_t *weight_scales;
         int scale_rows,scale_cols;
+        int mtiles,raster_group;
     };
     // First 1024-byte region holds both endpoints' mbarriers.
     static constexpr int smem = 1024+sizeof(Shared);
     static_assert(smem<=101376, "Configuration exceeds SM120 shared memory");
 };
 
-template<int R,int C,int BK,int Stages,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false>
+template<int R,int C,int BK,int Stages,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false,bool Prefetch=false>
 __global__ __launch_bounds__(384,1) void persistent_gemm(
     const __grid_constant__ typename Config<R,C,BK,Stages,DirectB>::Args args) {
     static_assert(!SwapAB || (DirectB && HasWeightScale));
+    static_assert(!Prefetch || !DirectB);
     using CF = Config<R,C,BK,Stages,DirectB>;
     using Shared = typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
@@ -53,7 +62,8 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
             int last = 0;
             // Static persistent assignment: no global counter or task loads.
             for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
-                int mr = (task/args.ntiles)*(8*R), nc = (task%args.ntiles)*C;
+                int2 coord=forward_raster_tile(task,args.ntiles,args.mtiles,args.raster_group);
+                int mr = coord.x*(8*R), nc = coord.y*C;
                 for(int k=0;k<args.ktiles;++k) {
                     auto packet = pipe.waitBuffer(0,shared.input);
                     auto &tile = packet.template get<0>();
@@ -91,7 +101,73 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
         for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
             kt::rt_fl<SwapAB?C:R,SwapAB?R:C> accum;
             kt::warp::rt_maps::zero(accum);
-            for(int k=0;k<args.ktiles;++k) {
+            if constexpr(Prefetch) {
+                // Pipeline native K32 MMA fragments rather than entire BK
+                // packets: two BK64/C128 B tiles would exhaust registers.
+                constexpr int RK=32,Parts=BK/RK;
+                struct Registers {
+                    kt::rt_bf<R,RK> a;
+                    kt::rt_fp8e4m3<C,RK> b;
+                    kt::mxfp8_scale<C,RK> bs;
+                };
+                Registers current,next;
+                auto load=[&]<int Part>(Registers &dst) {
+                    if constexpr(Part==0)pipe.waitBuffer(2,shared.input);
+                    auto packet=pipe.currentBuffer(2,shared.input);
+                    auto &tile=packet.template get<0>();
+                    auto ap=tile.a[group].template subtile<4*R,RK>({0,Part});
+                    auto bp=tile.b.template subtile<C,RK>({0,Part});
+                    kt::warpgroup::load(dst.a,ap);
+                    kt::warp::load<true>(dst.b,bp);
+#pragma unroll
+                    for(int n=0;n<C/16;++n)
+                        if constexpr(HasWeightScale)
+                            dst.bs.data[n][0]=scale_buffer[packet.SlotIdx][n/2][Part];
+                        else dst.bs.data[n][0]=127;
+                };
+                auto release=[&]() {
+                    // Delay the release/sync until after the independent MMA,
+                    // otherwise WARPSYNC can drain the just-issued LDSM.
+                    // BK64 slots remain owned until both K32 parts were read.
+                    pipe.currentBuffer(2,shared.input).submitToNextAndTrigger();
+                    pipe.moveNext();
+                };
+                load.template operator()<0>(current);
+                // Explicit ping-pong references avoid a dynamically indexed
+                // register-tile array (which would force local-memory traffic).
+                if constexpr(Parts==2) {
+                    // BK64 always has exactly two K32 parts. Make their offsets
+                    // static, and release one shared packet per loop iteration.
+                    for(int k=0;k<args.ktiles;++k) {
+                        kt::rt_fp8e4m3<R,RK> aq;
+                        kt::mxfp8_scale<R,RK> as;
+                        kt::online_quantize_mxfp8(aq,as,current.a);
+                        load.template operator()<1>(next);
+                        kt::warp::wmma::mma_ABt_block_scaled(accum,aq,current.b,accum,as,current.bs);
+                        release();
+                        kt::online_quantize_mxfp8(aq,as,next.a);
+                        if(k+1<args.ktiles)load.template operator()<0>(current);
+                        kt::warp::wmma::mma_ABt_block_scaled(accum,aq,next.b,accum,as,next.bs);
+                    }
+                } else {
+                    static_assert(Parts==1);
+                    release();
+                    for(int k=0;k<args.ktiles;k+=2) {
+                        kt::rt_fp8e4m3<R,RK> aq;
+                        kt::mxfp8_scale<R,RK> as;
+                        kt::online_quantize_mxfp8(aq,as,current.a);
+                        if(k+1<args.ktiles)load.template operator()<0>(next);
+                        kt::warp::wmma::mma_ABt_block_scaled(accum,aq,current.b,accum,as,current.bs);
+                        if(k+1<args.ktiles) {
+                            release();
+                            kt::online_quantize_mxfp8(aq,as,next.a);
+                            if(k+2<args.ktiles)load.template operator()<0>(current);
+                            kt::warp::wmma::mma_ABt_block_scaled(accum,aq,next.b,accum,as,next.bs);
+                            if(k+2<args.ktiles)release();
+                        }
+                    }
+                }
+            } else for(int k=0;k<args.ktiles;++k) {
                 auto packet = pipe.waitBuffer(2,shared.input);
                 auto &tile = packet.template get<0>();
                 kt::rt_bf<R,BK> ar;
@@ -152,7 +228,8 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
             asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
             kt::warpgroup::sync(group+1);
             if(writer) {
-                int mr = (task/args.ntiles)*(8*R)+group*(4*R), nc = (task%args.ntiles)*C;
+                int2 coord=forward_raster_tile(task,args.ntiles,args.mtiles,args.raster_group);
+                int mr = coord.x*(8*R)+group*(4*R), nc = coord.y*C;
                 kt::tma::store_async(args.out,shared.output[group],{0,0,mr,nc});
                 kt::tma::store_commit_group();
             }
@@ -169,8 +246,9 @@ struct PlanBase {
     virtual ~PlanBase() = default;
     virtual void launch(cudaStream_t stream) = 0;
     virtual void info(int *data) = 0;
+    virtual void set_raster_group(int size) = 0;
 };
-template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false> struct Plan final : PlanBase {
+template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false,bool Prefetch=false> struct Plan final : PlanBase {
     using CF=Config<R,C,BK,S,DirectB>;
     typename CF::Args args;
     int grid, regs;
@@ -179,14 +257,14 @@ template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false,b
              Global<typename CF::BTile>(static_cast<kt::fp8e4m3*>(b),1,1,DirectB?brows:n,DirectB?n:k),
              Global<typename CF::OTile>(static_cast<kt::bf16*>(o),1,1,m,n),
              (n+C-1)/C,((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,
-             scales,DirectB?srows:(n+31)/32,DirectB?scols:(k+31)/32} {
+             scales,DirectB?srows:(n+31)/32,DirectB?scols:(k+31)/32,(m+8*R-1)/(8*R),1} {
         if((DirectB?n:k)%(CF::BTile::swizzle_bytes) || n%(CF::OTile::swizzle_bytes/2))
             throw std::runtime_error("K/N must be aligned to the standard TMA swizzle panel");
         int dev; check(cudaGetDevice(&dev));
         cudaDeviceProp prop; check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0 ? std::min(sms,prop.multiProcessorCount) : prop.multiProcessorCount);
-        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB>));
+        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB,Prefetch>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB,Prefetch>));
         regs=attr.numRegs;
         // 256 consumers*232 + 128 producers*40 need 64512 registers.
         // ptxas accounts for setmaxnreg and supplies 168 initial registers/thread.
@@ -194,10 +272,14 @@ template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false,b
         if(attr.localSizeBytes) throw std::runtime_error("Kernel spills to local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB><<<grid,384,CF::smem,stream>>>(args);
+        persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB,Prefetch><<<grid,384,CF::smem,stream>>>(args);
         check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
+    void set_raster_group(int size) override {
+        if(size<1)throw std::runtime_error("Raster group must be positive");
+        args.raster_group=std::min(size,args.mtiles);
+    }
 };
 static thread_local std::string error;
 } // namespace fp8gemm
@@ -240,6 +322,32 @@ extern "C" int tk_gemm_launch(void *plan,void *stream) {
 }
 extern "C" void tk_gemm_info(void *plan,int *data) {static_cast<fp8gemm::PlanBase*>(plan)->info(data);}
 extern "C" void tk_gemm_destroy(void *plan) {delete static_cast<fp8gemm::PlanBase*>(plan);}
+extern "C" int tk_gemm_set_raster_group(void *plan,int size) {
+    try {
+        if(!plan)throw std::runtime_error("Invalid plan");
+        static_cast<fp8gemm::PlanBase*>(plan)->set_raster_group(size);return 0;
+    }catch(const std::exception &e){fp8gemm::error=e.what();return -1;}
+}
+
+template<bool Scaled>
+static void *create_prefetch(void *a,void *b,void *scales,void *out,int m,int n,int k,int config,int sms) {
+    using namespace fp8gemm;
+    try {
+        if(m<=0 || n<=0 || k<=0 || !a || !b || !out)throw std::runtime_error("Invalid GEMM dimensions/pointers");
+#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,Scaled,false,false,true>(a,b,out,m,n,k,sms,static_cast<uint8_t*>(scales))
+        switch(config) {
+            CFG(0,16,32,32,2);CFG(1,16,64,32,2);CFG(2,16,128,32,2);
+            CFG(3,32,32,32,2);CFG(4,32,64,32,2);CFG(5,64,16,32,2);
+            CFG(6,64,32,32,2);CFG(7,16,64,64,2);CFG(8,16,128,64,2);CFG(9,32,32,64,2);
+            default:throw std::runtime_error("Unknown configuration");
+        }
+#undef CFG
+    }catch(const std::exception &e){error=e.what();return nullptr;}
+}
+extern "C" void *tk_gemm_create_prefetch(void *a,void *b,void *scales,void *out,int m,int n,int k,int config,int sms) {
+    return scales?create_prefetch<true>(a,b,scales,out,m,n,k,config,sms):
+                  create_prefetch<false>(a,b,scales,out,m,n,k,config,sms);
+}
 
 // Direct AB: A[M,K] may include zero-padded K columns, B[brows,N] retains
 // the forward weight orientation. TMA handles reduction-tail rows of B.

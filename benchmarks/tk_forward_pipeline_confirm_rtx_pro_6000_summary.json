@@ -1,0 +1,136 @@
+{
+  "source": "benchmarks/tk_forward_pipeline_confirm_rtx_pro_6000.json",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+  "peak_tflops": [
+    877.9,
+    1007.6
+  ],
+  "method": "Fixed original default tile; independently retested groups for each path. Warm CUDA graphs, prequantized weights; FP8 GEMM only; unlocked clocks. Prefetch comparison uses identical tile and group.",
+  "rows": [
+    {
+      "M": 256,
+      "N": 2048,
+      "K": 512,
+      "config": 7,
+      "old_us": 6.72899978235364,
+      "row_major_us": 6.763000041246414,
+      "base_name": "base_c7_g1",
+      "base_us": 6.763000041246414,
+      "base_speedup": 0.9951215878840088,
+      "base_mfu_range": [
+        7.878477977040519,
+        9.042435823745333
+      ],
+      "pref_name": "pref_c7_g1",
+      "pref_us": 6.98099983856082,
+      "pref_speedup": 0.9627472308139512,
+      "pref_mfu_range": [
+        7.632452100825213,
+        8.760062349688443
+      ],
+      "prefetch_same_group_speedup": 0.9691954998151232,
+      "all_tile_best": "old_c7",
+      "all_tile_best_us": 6.72899978235364
+    },
+    {
+      "M": 1024,
+      "N": 8192,
+      "K": 1024,
+      "config": 8,
+      "old_us": 39.42900151014328,
+      "row_major_us": 39.44050148129463,
+      "base_name": "base_c8_g1",
+      "base_us": 39.44050148129463,
+      "base_speedup": 0.9996309415494671,
+      "base_mfu_range": [
+        43.23040114199685,
+        49.61721402286824
+      ],
+      "pref_name": "pref_c8_g1",
+      "pref_us": 40.02249985933304,
+      "pref_speedup": 0.983319349504417,
+      "pref_mfu_range": [
+        42.60175417004303,
+        48.89569142469001
+      ],
+      "prefetch_same_group_speedup": 0.9859329277407702,
+      "all_tile_best": "old_c8",
+      "all_tile_best_us": 39.42900151014328
+    },
+    {
+      "M": 2048,
+      "N": 16384,
+      "K": 2048,
+      "config": 8,
+      "old_us": 286.09499335289,
+      "row_major_us": 286.41998767852783,
+      "base_name": "base_c8_g1",
+      "base_us": 286.41998767852783,
+      "base_speedup": 0.9989494724323364,
+      "base_mfu_range": [
+        47.62317641579061,
+        54.65897318208295
+      ],
+      "pref_name": "pref_c8_g1",
+      "pref_us": 289.4290089607239,
+      "pref_speedup": 0.9883854439357337,
+      "pref_mfu_range": [
+        47.128066572187,
+        54.09071634370159
+      ],
+      "prefetch_same_group_speedup": 0.9892568545025561,
+      "all_tile_best": "old_c8",
+      "all_tile_best_us": 286.09499335289
+    },
+    {
+      "M": 4096,
+      "N": 4096,
+      "K": 4096,
+      "config": 8,
+      "old_us": 296.3240146636963,
+      "row_major_us": 296.3410019874573,
+      "base_name": "base_c8_g12",
+      "base_us": 295.8334982395172,
+      "base_speedup": 1.0013381053099177,
+      "base_mfu_range": [
+        46.10779267187482,
+        52.91970827677534
+      ],
+      "pref_name": "pref_c8_g12",
+      "pref_us": 300.0335097312927,
+      "pref_speedup": 0.9876967602934899,
+      "pref_mfu_range": [
+        45.46235390319958,
+        52.178913079922424
+      ],
+      "prefetch_same_group_speedup": 0.9860114173010522,
+      "all_tile_best": "base_c8_g12",
+      "all_tile_best_us": 295.8334982395172
+    },
+    {
+      "M": 8192,
+      "N": 8192,
+      "K": 4096,
+      "config": 8,
+      "old_us": 1146.5879678726196,
+      "row_major_us": 1147.9275226593018,
+      "base_name": "base_c8_g1",
+      "base_us": 1147.9275226593018,
+      "base_speedup": 0.9989413701742048,
+      "base_mfu_range": [
+        47.529933146385396,
+        54.55195425253209
+      ],
+      "pref_name": "pref_c8_g1",
+      "pref_us": 1159.7720384597778,
+      "pref_speedup": 0.9886698516996403,
+      "pref_mfu_range": [
+        47.04451961210535,
+        53.99482624576529
+      ],
+      "prefetch_same_group_speedup": 0.9895473014585261,
+      "all_tile_best": "old_c8",
+      "all_tile_best_us": 1146.5879678726196
+    }
+  ]
+}

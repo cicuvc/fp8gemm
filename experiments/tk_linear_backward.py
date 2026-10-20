@@ -42,8 +42,8 @@ def libraries():
     headers=list((ROOT/'third_party/thunderkittens/include').rglob('*.cuh'))
     def stale(binary,sources):
         return not binary.exists() or any(s.stat().st_mtime>binary.stat().st_mtime for s in sources)
-    if stale(GEMM_DIR/'libgemm.so',[ROOT/'cuda/persistent_fp8_gemm.cu',*headers]):build_gemm()
-    if stale(DUAL_DIR/'libdual.so',[ROOT/'cuda/persistent_dual_online_gemm.cu',*headers]):build_dual()
+    if stale(GEMM_DIR/'libgemm.so',[ROOT/'cuda/persistent_fp8_gemm.cu',ROOT/'cuda/tma_ring_pipe.cuh',*headers]):build_gemm()
+    if stale(DUAL_DIR/'libdual.so',[ROOT/'cuda/persistent_dual_online_gemm.cu',ROOT/'cuda/tma_ring_pipe.cuh',*headers]):build_dual()
     if stale(OUTPUT/'libprepare.so',[ROOT/'cuda/linear_backward_prepare.cu']):build()
     lib=ct.CDLL(str(OUTPUT/'libprepare.so'))
     lib.linear_prepare_dy.argtypes=[ct.c_void_p]*4+[ct.c_int]*4+[ct.c_int64]*2+[ct.c_int,ct.c_void_p]

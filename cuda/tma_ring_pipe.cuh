@@ -133,12 +133,20 @@ template <int N_BUFFERS, int N_ENDS, typename TBufferSet, typename... Ts> struct
     }
 
     template <typename... TBuffers>
+    __forceinline__ __device__ Handle currentBuffer(uint32_t next_end,
+                                                    TBuffers (&...buffers)[N_BUFFERS]) {
+        // Non-acquiring view of the current slot. The caller must already
+        // have acquired this generation and must not have released it.
+        return {this, TBufferSet::make_tuple(buffers[Slot]...), Slot, next_end};
+    }
+
+    template <typename... TBuffers>
     __forceinline__ __device__ Handle waitBuffer(uint32_t next_end,
                                                  TBuffers (&...buffers)[N_BUFFERS]) {
         waitSlot(Slot);
         // Consume exactly one incoming generation; publication does not consume it.
         PhaseState ^= 1u << Slot;
-        return {this, TBufferSet::make_tuple(buffers[Slot]...), Slot, next_end};
+        return currentBuffer(next_end,buffers...);
     }
 
     __forceinline__ __device__ void waitSlot(uint32_t slot) {

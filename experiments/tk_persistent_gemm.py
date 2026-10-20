@@ -36,6 +36,12 @@ class GemmLibrary:
         self.lib.tk_gemm_error.restype = ct.c_char_p
         self.lib.tk_gemm_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_gemm_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
+        if hasattr(self.lib, 'tk_gemm_set_raster_group'):
+            self.lib.tk_gemm_set_raster_group.argtypes = [ct.c_void_p, ct.c_int]
+            self.lib.tk_gemm_set_raster_group.restype = ct.c_int
+        if hasattr(self.lib, 'tk_gemm_create_prefetch'):
+            self.lib.tk_gemm_create_prefetch.argtypes = [ct.c_void_p]*4+[ct.c_int]*5
+            self.lib.tk_gemm_create_prefetch.restype = ct.c_void_p
         if hasattr(self.lib, 'tk_gemm_create_ab'):
             self.lib.tk_gemm_create_ab.argtypes = [ct.c_void_p]*4+[ct.c_int]*8
             self.lib.tk_gemm_create_ab.restype = ct.c_void_p
@@ -43,8 +49,8 @@ class GemmLibrary:
             self.lib.tk_gemm_create_ab_swapped.argtypes = [ct.c_void_p]*4+[ct.c_int]*8
             self.lib.tk_gemm_create_ab_swapped.restype = ct.c_void_p
 
-    def plan(self, a, b, config=8, out=None, sms=0, scales=None):
-        return GemmPlan(self, a, b, config, out, sms, scales)
+    def plan(self, a, b, config=8, out=None, sms=0, scales=None, *, raster_group=1, prefetch=False):
+        return GemmPlan(self, a, b, config, out, sms, scales, raster_group=raster_group, prefetch=prefetch)
 
     def plan_ab(self, a, b, scales, config=8, out=None, sms=0, *, swap_ab=False):
         return GemmABPlan(self, a, b, scales, config, out, sms, swap_ab)
@@ -117,9 +123,17 @@ class GemmPlan:
     consumers load them from shared memory before releasing their input slot.
     A uses the existing online_scale exponent rule.
     K/N must be multiples of the selected TMA panel widths (64 always works).
+    raster_group groups output M tiles for L2 reuse (1 is row-major).
+    prefetch loads the next shared A/B/scale packet into registers before
+    issuing the current packet's MMA, with explicit register ping-pong.
     No autograd registration; inputs/outputs must remain alive until work ends.
     """
-    def __init__(self, owner, a, b, config, out, sms, scales=None):
+    def __init__(self, owner, a, b, config, out, sms, scales=None, *, raster_group=1, prefetch=False):
+        self.handle = None
+        if isinstance(raster_group,bool) or not isinstance(raster_group,int) or not 1<=raster_group<=2**31-1:
+            raise ValueError('raster_group must be a positive int32')
+        if not isinstance(prefetch,bool):
+            raise ValueError('prefetch must be bool')
         if not 0 <= config < len(CONFIGS):
             raise ValueError('Invalid configuration')
         if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[1]:
@@ -140,16 +154,29 @@ class GemmPlan:
         self.owner, self.a, self.b, self.out, self.scales = owner, a, b, out, scales
         self.handle = None
         with torch.cuda.device(a.device):
-            if scales is None:
+            if prefetch:
+                if not hasattr(owner.lib, 'tk_gemm_create_prefetch'):
+                    raise RuntimeError('Rebuild CUDA library for register prefetch')
+                self.handle = owner.lib.tk_gemm_create_prefetch(
+                    a.data_ptr(), b.data_ptr(), scales.data_ptr() if scales is not None else 0,
+                    out.data_ptr(), m,n,k,config,sms)
+            elif scales is None:
                 self.handle = owner.lib.tk_gemm_create(a.data_ptr(), b.data_ptr(), out.data_ptr(), m, n, k, config, sms)
             else:
                 self.handle = owner.lib.tk_gemm_create_scaled(a.data_ptr(), b.data_ptr(), scales.data_ptr(),
                                                              out.data_ptr(), m, n, k, config, sms)
         if not self.handle:
             raise RuntimeError(owner.lib.tk_gemm_error().decode())
+        if raster_group != 1:
+            if not hasattr(owner.lib, 'tk_gemm_set_raster_group'):
+                raise RuntimeError('Rebuild CUDA library for grouped rasterization')
+            if owner.lib.tk_gemm_set_raster_group(self.handle,raster_group):
+                raise RuntimeError(owner.lib.tk_gemm_error().decode())
         info = (ct.c_int * 7)()
         owner.lib.tk_gemm_info(self.handle, info)
         self.info = dict(zip(['R', 'C', 'BK', 'stages', 'shared_bytes', 'initial_regs', 'grid'], info))
+        self.info.update(raster_group=min(raster_group,(m+8*CONFIGS[config][0]-1)//(8*CONFIGS[config][0])),
+                         prefetch=prefetch)
 
     def __call__(self):
         with torch.cuda.device(self.a.device):

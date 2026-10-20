@@ -1,0 +1,627 @@
+third_party/thunderkittens/include/ops/device/../../types/global/../register/rt.cuh(76): warning #20012-D: __device__ annotation is ignored on a non-virtual function("rt") that is explicitly defaulted on its first declaration
+      __attribute__((device)) inline rt() = default;
+                     ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=64]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=128]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=64]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=256, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=16, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=256, _cols=16]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=32, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../register/rt.cuh(76): warning #20012-D: __device__ annotation is ignored on a non-virtual function("rt") that is explicitly defaulted on its first declaration
+      __attribute__((device)) inline rt() = default;
+                     ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=64]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=128]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 295 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=32, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=64]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=64, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=64, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=256, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=16, _cols=32]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=256, _cols=16]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=64, C=16, BK=32, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=64, C=16, BK=32, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 296 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=64, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=64, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=64]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=32, C=32, BK=64, Stages=2, DirectB=false]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=32, C=32, BK=64, S=2, HasWeightScale=false, DirectB=false, SwapAB=false, Prefetch=false]" at line 298 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=128]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=32, Stages=2, DirectB=true]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=32, Stages=2, DirectB=true]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=true]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=32, Stages=2, DirectB=true]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=32, S=2, HasWeightScale=true, DirectB=true, SwapAB=false, Prefetch=false]" at line 363 of cuda/persistent_fp8_gemm.cu
+            instantiation of "void *create_ab<SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int, int, int) [with SwapAB=false]" at line 374 of cuda/persistent_fp8_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=128]" at line 23 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Packet [with R=16, C=128, BK=64, Stages=2, DirectB=true]" at line 24 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB>::Shared [with R=16, C=128, BK=64, Stages=2, DirectB=true]" at line 35 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=true]" at line 36 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Config<R, C, BK, Stages, DirectB> [with R=16, C=128, BK=64, Stages=2, DirectB=true]" at line 253 of cuda/persistent_fp8_gemm.cu
+            instantiation of class "fp8gemm::Plan<R, C, BK, S, HasWeightScale, DirectB, SwapAB, Prefetch> [with R=16, C=128, BK=64, S=2, HasWeightScale=true, DirectB=true, SwapAB=false, Prefetch=false]" at line 365 of cuda/persistent_fp8_gemm.cu
+            instantiation of "void *create_ab<SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int, int, int) [with SwapAB=false]" at line 374 of cuda/persistent_fp8_gemm.cu
+
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 34.911 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 34.739 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.108 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 35.529 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.162 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 26.592 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.323 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 24.291 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb1ELb1ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 22.479 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.740 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 35.681 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.708 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 36.066 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.579 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 26.814 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 29.093 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 24.514 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 22.526 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 78.073 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 82.674 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 56.053 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 103.475 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 86.627 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 66.091 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 52.111 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 54.943 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 40.768 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb0ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 35.321 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 75.532 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 79.282 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 55.324 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 99.045 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 88.193 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 68.190 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 53.263 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 57.460 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 42.891 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb0ELb0ELb1EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 36.577 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.856 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.834 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 27.242 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.971 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.229 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 29.024 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 25.512 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 26.873 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 23.306 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 21.433 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.264 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.446 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 25.738 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.423 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi64ELi16ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.832 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.102 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi32ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 24.047 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 25.373 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 21.932 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm15persistent_gemmILi16ELi32ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS_6ConfigIXT_EXT0_EXT1_EXT2_EXT4_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 19.950 ms

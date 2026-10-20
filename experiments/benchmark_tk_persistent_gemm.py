@@ -103,9 +103,9 @@ def assembly(output, cuda):
         ops = Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)', section))
         for prefix in ['UTMALDG', 'UTMASTG', 'LDSM', 'STSM', 'QMMA.SF', 'USETMAXREG']:
             assert any(op.startswith(prefix) for op in ops), (name, prefix)
-        flags = re.search(r'ELb([01])ELb([01])ELb([01])E', name)
+        flags = re.search(r'ELb([01])ELb([01])ELb([01])ELb([01])E', name)
         assert flags, name
-        scaled, direct_ab, swap_ab = [v == '1' for v in flags.groups()]
+        scaled, direct_ab, swap_ab, prefetch = [v == '1' for v in flags.groups()]
         assert not any(op.startswith(('STG', 'LDL', 'STL', 'CALL')) for op in ops), name
         loads = list(re.finditer(r'\sLDG\.[^;]+;', section))
         if scaled:
@@ -129,12 +129,12 @@ def assembly(output, cuda):
             pc, op, body = match.groups()
             operands = body.split(',')
             if op.startswith('QMMA'):
-                b = int(operands[2].strip()[1:])
+                b = int(re.match(r"R(\d+)", operands[2].strip())[1])
                 origins = [definitions.get(b), definitions.get(b+1)]
                 qmma_count += 1
                 if all(o and o[0].startswith('LDSM') for o in origins) and origins[0][1] == origins[1][1]:
                     direct_pairs += 1
-                a = int(operands[1].strip()[1:])
+                a = int(re.match(r"R(\d+)", operands[1].strip())[1])
                 origins_a = [definitions.get(a+i) for i in range(4)]
                 if (all(o and o[0] == 'LDSM.8.MT1616.2' for o in origins_a)
                         and len({o[1] for o in origins_a}) == 1):
@@ -155,8 +155,9 @@ def assembly(output, cuda):
             assert 'STSM.16.MT88.4' in ops, name
         result[name] = {'opcodes': dict(ops), 'qmma_instructions': qmma_count,
                         'b_pairs_direct_from_ldsm': direct_pairs, 'direct_ab': direct_ab,
-                        'a_quads_direct_from_transpose_ldsm': direct_a, 'swap_ab': swap_ab}
-    assert len(result) == 4*len(CONFIGS)-2  # C16 has no direct/swapped-AB variants.
+                        'a_quads_direct_from_transpose_ldsm': direct_a, 'swap_ab': swap_ab,
+                        'prefetch': prefetch}
+    assert len(result) == 6*len(CONFIGS)-2  # Plus two forward prefetch variants per tile.
     return result
 
 
