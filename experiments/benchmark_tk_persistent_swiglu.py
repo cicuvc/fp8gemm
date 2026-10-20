@@ -132,7 +132,10 @@ def assembly(output,cuda,fused_silu=True):
     for section in sass.split('Function : ')[1:]:
         name=section.splitlines()[0]
         ops=Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)',section))
-        assert not any(op.startswith(('STG','LDL','STL','CALL')) for op in ops),name
+        cached=bool(re.search(r'ELb[01]ELb1E',name))
+        assert not any(op.startswith(('LDL','STL','CALL')) for op in ops),name
+        stores=[op for op in ops if op.startswith('STG')]
+        assert (stores and all(op=='STG.E.U8' for op in stores)) if cached else not stores,name
         start=section.index('USETMAXREG.DEALLOC');end=section.index('USETMAXREG.TRY_ALLOC')
         loads=list(re.finditer(r'\sLDG\.[^;]+;',section))
         assert loads and all(start<load.start()<end for load in loads),name
@@ -153,7 +156,7 @@ def assembly(output,cuda,fused_silu=True):
                 for i in range(width):defs[base+i]=('LDSM' if op.startswith('LDSM') else op,pc)
         assert direct==count>0,(name,direct,count)
         result[name]={'opcodes':dict(ops),'qmma':count,'direct_b_pairs':direct}
-    assert len(result)==2*len(CONFIGS)
+    assert len(result)==4*len(CONFIGS)
     return result
 
 

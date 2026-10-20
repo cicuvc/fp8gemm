@@ -23,6 +23,9 @@ class SwiGLULibrary:
         self.lib=ct.CDLL(str(Path(output).resolve()/'libswiglu.so'))
         self.lib.tk_swiglu_create.argtypes=[ct.c_void_p]*8+[ct.c_int]*5
         self.lib.tk_swiglu_create.restype=ct.c_void_p
+        if hasattr(self.lib,'tk_swiglu_create_cached'):
+            self.lib.tk_swiglu_create_cached.argtypes=[ct.c_void_p]*10+[ct.c_int]*6
+            self.lib.tk_swiglu_create_cached.restype=ct.c_void_p
         self.lib.tk_swiglu_launch.argtypes=[ct.c_void_p,ct.c_void_p]
         self.lib.tk_swiglu_launch.restype=ct.c_int
         self.lib.tk_swiglu_error.restype=ct.c_char_p
@@ -30,9 +33,9 @@ class SwiGLULibrary:
         self.lib.tk_swiglu_info.argtypes=[ct.c_void_p,ct.POINTER(ct.c_int)]
 
     def plan(self,x,gate_weight,gate_scale,up_weight,up_scale,config=3,
-             out=None,gate_out=None,up_out=None,sms=0):
+             out=None,gate_out=None,up_out=None,sms=0,save_x=False,cached_x=None,cached_scale=None):
         return SwiGLUPlan(self,x,gate_weight,gate_scale,up_weight,up_scale,
-                          config,out,gate_out,up_out,sms)
+                          config,out,gate_out,up_out,sms,save_x,cached_x,cached_scale)
 
 
 class SwiGLUPlan:
@@ -44,10 +47,17 @@ class SwiGLUPlan:
     Matches Triton online-scale/SiLU conventions, including scale-zero clipping.
     By default the SiLU epilogue uses FMA; build(fused_silu=False) preserves
     Triton's add/multiply ordering for rounding-sensitive comparisons.
+    save_x=True also saves transpose-quantized X for dW=dY.T@X, with one
+    scale per feature/M32. cached_x has shape [K,ceil(M/128)*128] and E4M3
+    dtype; cached_scale is uint8 [K,ceil(M/128)*4]. FP8 token padding and
+    wholly padded scale groups are zero. This is
+    a separate quantization axis from the forward X quantization along K.
+    The cache is generated from already-loaded BF16 shared tiles, once per
+    activation tile; FP8 writes use TMA, scale bytes use ordinary stores.
     This experimental entry point has no autograd registration. Allocations are
     retained by the plan and must remain alive until asynchronous work completes.
     """
-    def __init__(self,owner,x,g,gs,u,us,config,out,go,uo,sms):
+    def __init__(self,owner,x,g,gs,u,us,config,out,go,uo,sms,save_x,cached_x,cached_scale):
         self.handle=None
         if not 0<=config<len(CONFIGS) or x.ndim!=2 or g.ndim!=2 or u.shape!=g.shape:
             raise ValueError('Invalid configuration or matrix shapes')
@@ -67,8 +77,24 @@ class SwiGLUPlan:
                 raise ValueError('Invalid output buffer')
         if any(t.data_ptr()%16 for t in [x,g,u,out]+([] if go is None else [go,uo])):
             raise ValueError('TMA tensor base pointers must be 16-byte aligned')
+        if not save_x and (cached_x is not None or cached_scale is not None):
+            raise ValueError('Cache buffers require save_x=True')
+        padded_m=(m+127)//128*128
+        if save_x:
+            if not hasattr(owner.lib,'tk_swiglu_create_cached'):
+                raise RuntimeError('Rebuild the CUDA library to enable activation caching')
+            if cached_x is None:
+                cached_x=torch.empty((k,padded_m),device=x.device,dtype=torch.float8_e4m3fn)
+            if cached_scale is None:
+                cached_scale=torch.empty((k,padded_m//32),device=x.device,dtype=torch.uint8)
+            for tensor,dtype,shape in [(cached_x,torch.float8_e4m3fn,(k,padded_m)),
+                                       (cached_scale,torch.uint8,(k,padded_m//32))]:
+                if tensor.dtype!=dtype or tensor.shape!=shape or tensor.device!=x.device or not tensor.is_contiguous():
+                    raise ValueError('Invalid activation cache buffer')
+            if cached_x.data_ptr()%16:
+                raise ValueError('TMA activation cache must be 16-byte aligned')
         # Output aliasing can race across persistent CTAs or overwrite auxiliaries.
-        tensors=[x,g,gs,u,us];outputs=[out]+([] if go is None else [go,uo])
+        tensors=[x,g,gs,u,us];outputs=[out]+([] if go is None else [go,uo])+([] if not save_x else [cached_x,cached_scale])
         for i,tensor in enumerate(outputs):
             lo=tensor.data_ptr();hi=lo+tensor.numel()*tensor.element_size()
             for other in tensors+outputs[:i]:
@@ -76,12 +102,18 @@ class SwiGLUPlan:
                 if lo<oh and ol<hi:raise ValueError('Output buffers must not overlap inputs or each other')
         self.owner,self.x,self.g,self.gs,self.u,self.us=owner,x,g,gs,u,us
         self.out,self.gate_out,self.up_out=out,go,uo
+        self.cached_x,self.cached_scale=cached_x,cached_scale
         with torch.cuda.device(x.device):
-            self.handle=owner.lib.tk_swiglu_create(x.data_ptr(),g.data_ptr(),gs.data_ptr(),u.data_ptr(),us.data_ptr(),
-                out.data_ptr(),None if go is None else go.data_ptr(),None if uo is None else uo.data_ptr(),m,n,k,config,sms)
+            pointers=[x.data_ptr(),g.data_ptr(),gs.data_ptr(),u.data_ptr(),us.data_ptr(),out.data_ptr(),
+                      None if go is None else go.data_ptr(),None if uo is None else uo.data_ptr()]
+            if save_x:
+                self.handle=owner.lib.tk_swiglu_create_cached(*pointers,cached_x.data_ptr(),cached_scale.data_ptr(),
+                                                              m,n,k,config,sms,padded_m)
+            else:
+                self.handle=owner.lib.tk_swiglu_create(*pointers,m,n,k,config,sms)
         if not self.handle:raise RuntimeError(owner.lib.tk_swiglu_error().decode())
-        info=(ct.c_int*8)();owner.lib.tk_swiglu_info(self.handle,info)
-        self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid','store_aux'],info))
+        info=(ct.c_int*10)();owner.lib.tk_swiglu_info(self.handle,info)
+        self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid','store_aux','save_x','cached_tokens'],info))
 
     def __call__(self):
         with torch.cuda.device(self.x.device):
