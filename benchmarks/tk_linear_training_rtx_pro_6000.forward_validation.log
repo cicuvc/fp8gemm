@@ -1,0 +1,4 @@
+PASS exact/reuse M,N,K=(1, 64, 64), all 10 configurations
+PASS exact/reuse M,N,K=(137, 192, 64), all 10 configurations
+PASS exact/reuse M,N,K=(777, 320, 320), all 10 configurations
+PASS exact/reuse M,N,K=(1031, 192, 192), all 10 configurations

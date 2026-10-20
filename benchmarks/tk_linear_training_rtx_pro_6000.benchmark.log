@@ -1,0 +1,7 @@
+/usr/local/lib/python3.12/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+  warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+(256, 2048, 512): forward CUDA=6.652us Triton=7.464us (1.122x); backward CUDA=31.877us Triton=38.760us (1.216x); forward_backward CUDA=38.500us Triton=46.409us (1.205x)
+(1024, 8192, 1024): forward CUDA=37.922us Triton=50.941us (1.343x); backward CUDA=136.051us Triton=400.079us (2.941x); forward_backward CUDA=176.226us Triton=453.929us (2.576x)
+(2048, 16384, 2048): forward CUDA=261.191us Triton=347.914us (1.332x); backward CUDA=857.696us Triton=2776.362us (3.237x); forward_backward CUDA=1132.457us Triton=3137.032us (2.770x)
+(4096, 4096, 4096): forward CUDA=286.745us Triton=342.261us (1.194x); backward CUDA=715.934us Triton=2587.004us (3.613x); forward_backward CUDA=1003.905us Triton=2939.828us (2.928x)
+(8192, 8192, 4096): forward CUDA=1040.913us Triton=1427.943us (1.372x); backward CUDA=2714.496us Triton=10110.239us (3.725x); forward_backward CUDA=3736.368us Triton=11477.470us (3.072x)

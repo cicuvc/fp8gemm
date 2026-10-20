@@ -20,6 +20,7 @@
 #endif
 
 #include <bit>
+#include <cstdint>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <string>
