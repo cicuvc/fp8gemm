@@ -126,10 +126,23 @@ class FP8Linear(nn.Module):
     ``torch.compile``, synchronize after optimizer steps with
     ``step_fp8_optimizers`` or ``bind_fp8_optimizer``; version checks are
     skipped inside the compiled graph.
+
+    ``backward_backend="cuda"`` selects the SM120 WASP dX/dW GEMMs with
+    standalone Triton X-transpose quantization and CUDA layout/bias kernels.
+    It supports unaligned dimensions through padding, retaining FP32 dW.
+    The forward stays unchanged. Warm up once before CUDA graph capture;
+    missing CUDA libraries are built on first backward (CUDA toolkit required).
     """
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None,
+                 *, backward_backend: str = "triton"):
         super().__init__()
+        if backward_backend not in ("triton", "cuda"):
+            raise ValueError("backward_backend must be 'triton' or 'cuda'")
+        self.backward_backend = backward_backend
+        if backward_backend == "cuda":
+            # Register the custom operators before torch.compile traces forward.
+            from experiments.tk_linear_backward import linear
         self.in_features = in_features
         self.out_features = out_features
 
@@ -215,7 +228,10 @@ class FP8Linear(nn.Module):
 
         x = x.contiguous()
         weight_fp8, weight_scale = self.quantized_weight
-        return _fp8_linear_fwd(
+        linear = _fp8_linear_fwd
+        if self.backward_backend == "cuda":
+            from experiments.tk_linear_backward import linear
+        return linear(
             x,
             self.master_weight,
             weight_fp8,
@@ -226,7 +242,7 @@ class FP8Linear(nn.Module):
     def extra_repr(self):
         return (
             f"in_features={self.in_features}, out_features={self.out_features}, "
-            f"bias={self.bias is not None}"
+            f"bias={self.bias is not None}, backward_backend={self.backward_backend!r}"
         )
 
 
