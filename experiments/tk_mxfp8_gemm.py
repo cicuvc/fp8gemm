@@ -28,14 +28,24 @@ class Library:
         self.lib=ct.CDLL(str(Path(output)/'libgemm.so'))
         self.lib.tk_mx_create.argtypes=[ct.c_void_p]*5+[ct.c_int]*6
         self.lib.tk_mx_create.restype=ct.c_void_p
+        if hasattr(self.lib,'tk_mx_create_quantized'):
+            self.lib.tk_mx_create_quantized.argtypes=[ct.c_void_p]*7+[ct.c_int]*6
+            self.lib.tk_mx_create_quantized.restype=ct.c_void_p
         self.lib.tk_mx_error.restype=ct.c_char_p
         self.lib.tk_mx_launch.argtypes=[ct.c_void_p,ct.c_void_p]
         self.lib.tk_mx_info.argtypes=[ct.c_void_p,ct.POINTER(ct.c_int)]
         self.lib.tk_mx_destroy.argtypes=[ct.c_void_p]
-    def plan(self,a,b,as_,bs,config=8,out=None,sms=0,raster_group=1):
-        return Plan(self,a,b,as_,bs,config,out,sms,raster_group)
+    def plan(self,a,b,as_,bs,config=8,out=None,sms=0,raster_group=1,
+             save_quantized=False,quantized_out=None,quantized_scales=None):
+        """Optionally expose row-major E4M3 qout and next-A packed qscales.
+
+        Quantization uses the rounded BF16 output. Calling the plan still returns
+        BF16; qout/qscales remain allocated across launches and graph replays.
+        """
+        return Plan(self,a,b,as_,bs,config,out,sms,raster_group,
+                    save_quantized,quantized_out,quantized_scales)
 class Plan:
-    def __init__(self,owner,a,b,as_,bs,config,out,sms,group):
+    def __init__(self,owner,a,b,as_,bs,config,out,sms,group,save_quantized,qout,qscales):
         self.handle=None
         if type(group)!=int or not 0<group<2**31:raise ValueError('Invalid raster group')
         if config not in range(len(CONFIGS)):raise ValueError('Invalid config')
@@ -48,15 +58,31 @@ class Plan:
         if out is None:out=torch.empty((m,n),device=a.device,dtype=torch.bfloat16)
         if out.shape!=(m,n) or out.dtype!=torch.bfloat16:raise ValueError('Invalid output')
         tensors=[a,b,as_,bs,out]
+        if not save_quantized and (qout is not None or qscales is not None):
+            raise ValueError('Quantized outputs require save_quantized=True')
+        if save_quantized:
+            if CONFIGS[config][1]%32:raise ValueError('Quantized epilogue requires C divisible by 32')
+            c=CONFIGS[config][1]
+            qpanel=128 if c%128==0 else 64 if c%64==0 else 32
+            if n%qpanel:raise ValueError(f'N must align to FP8 output TMA swizzle panels ({qpanel} columns)')
+            if qout is None:qout=torch.empty((m,n),device=a.device,dtype=a.dtype)
+            if qscales is None:qscales=torch.empty(((n+127)//128,(m+15)//16*16),device=a.device,dtype=torch.int32)
+            if qout.shape!=(m,n) or qout.dtype!=a.dtype:raise ValueError('Invalid quantized output')
+            if qscales.shape!=((n+127)//128,(m+15)//16*16) or qscales.dtype!=torch.int32:
+                raise ValueError('Invalid quantized scales')
+            tensors.extend([qout,qscales])
         if not a.is_cuda or any(t.device!=a.device or not t.is_contiguous() for t in tensors):
             raise ValueError('Expected contiguous tensors on one CUDA device')
-        if any(t.data_ptr()%16 for t in [a,b,as_,out]):raise ValueError('Unaligned TMA pointer')
-        lo=out.data_ptr();hi=lo+out.numel()*out.element_size()
-        if any(lo<t.data_ptr()+t.numel()*t.element_size() and t.data_ptr()<hi for t in tensors[:-1]):
-            raise ValueError('Output aliases input')
+        if any(t.data_ptr()%16 for t in [a,b,as_,*tensors[4:]]):raise ValueError('Unaligned output/TMA pointer')
+        for i,tensor in enumerate(tensors[4:],4):
+            lo=tensor.data_ptr();hi=lo+tensor.numel()*tensor.element_size()
+            if any(lo<t.data_ptr()+t.numel()*t.element_size() and t.data_ptr()<hi for t in tensors[:i]):
+                raise ValueError('Output aliases input or another output')
         self.owner=owner;self.refs=tensors;self.out=out
+        self.qout=qout;self.qscales=qscales
         with torch.cuda.device(a.device):
-            self.handle=owner.lib.tk_mx_create(*[t.data_ptr() for t in tensors],m,n,k,config,sms,group)
+            create=owner.lib.tk_mx_create_quantized if save_quantized else owner.lib.tk_mx_create
+            self.handle=create(*[t.data_ptr() for t in tensors],m,n,k,config,sms,group)
         if not self.handle:raise RuntimeError(owner.lib.tk_mx_error().decode())
         info=(ct.c_int*7)();owner.lib.tk_mx_info(self.handle,info)
         self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid'],info))

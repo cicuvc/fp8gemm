@@ -2,6 +2,7 @@
 #include "kittens.cuh"
 #include "tma_ring_pipe.cuh"
 #include "fp8_shared_load.cuh"
+#include "mxfp8_epilogue.cuh"
 #include <stdexcept>
 #include <string>
 namespace fp8gemm {
@@ -11,21 +12,29 @@ __device__ __forceinline__ int2 mx_raster(int task,int ntiles,int mtiles,int g) 
     int span=g*ntiles,first=task/span*g,rows=min(g,mtiles-first),local=task%span;
     return make_int2(first+local%rows,local/rows);
 }
-template<int R,int C,int BK,int S> struct MXConfig {
+template<int R,int C,int BK,int S,bool SaveQ=false> struct MXConfig {
     using ATile=kt::st_fp8e4m3<4*R,BK>;
     using BTile=kt::st_fp8e4m3<C,BK>;
     using OTile=kt::st_bf<4*R,C>;
+    using QTile=kt::st_fp8e4m3<4*R,(C+31)/32*32>;
+    union OutputStorage {OTile bf;QTile q;};
+    struct QuantizedArgs {MXGlobal<QTile> out;uint32_t *scales;};
+    struct NoQuantizedArgs {};
     static constexpr int SC=BK/32,SR=(C+31)/32;
     struct Packet {
         ATile a[2];BTile b;
     };
-    struct Shared {Packet input[S];OTile output[2];};
+    struct Shared {
+        Packet input[S];
+        std::conditional_t<SaveQ,OutputStorage,OTile> output[2];
+    };
     struct Args {
         MXGlobal<ATile> a;MXGlobal<BTile> b;MXGlobal<OTile> out;
         const uint32_t *as; // packed [ceil(K/128),roundup(M,16)] uint32 words
         const uint8_t *bs; // bs[ceil(N/32),K/32]
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
         uint32_t as_stride;
+        [[no_unique_address]] std::conditional_t<SaveQ,QuantizedArgs,NoQuantizedArgs> q;
     };
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
@@ -46,10 +55,10 @@ template<int R,int C,int BK,int S> struct MXConfig {
         }
     };
 };
-template<int R,int C,int BK,int S>
+template<int R,int C,int BK,int S,bool SaveQ=false>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
-    const __grid_constant__ typename MXConfig<R,C,BK,S>::Args args) {
-    using CF=MXConfig<R,C,BK,S>;using Shared=typename CF::Shared;
+    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ>::Args args) {
+    using CF=MXConfig<R,C,BK,S,SaveQ>;using Shared=typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid(),lane=threadIdx.x%32;
@@ -109,15 +118,47 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
                 packet.submitToNextAndTrigger();pipe.moveNext();
                 kt::warp::wmma::mma_ABt_block_scaled(accum,ar,br,accum,as,bs);
             }
-            if(writer)kt::tma::store_async_read_wait<0>();
-            kt::warpgroup::sync(group+1);
-            kt::warpgroup::store(shared.output[group],accum);
-            asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-            kt::warpgroup::sync(group+1);
-            if(writer) {
-                int2 coord=mx_raster(task,args.ntiles,args.mtiles,args.raster_group);
-                kt::tma::store_async(args.out,shared.output[group],{0,0,coord.x*8*R+group*4*R,coord.y*C});
-                kt::tma::store_commit_group();
+            if constexpr(SaveQ) {
+                kt::rt_bf<R,C> rounded;
+                kt::warp::copy(rounded,accum);
+                if(writer)kt::tma::store_async_read_wait<0>();
+                kt::warpgroup::sync(group+1);
+                kt::warpgroup::store(shared.output[group].bf,rounded);
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                kt::warpgroup::sync(group+1);
+                if(writer) {
+                    kt::tma::store_async(args.out,shared.output[group].bf,
+                                        {0,0,coord.x*8*R+group*4*R,nc});
+                    kt::tma::store_commit_group();
+                }
+                // Quantization can overlap TMA reading the BF16 output.
+                kt::rt_fp8e4m3<R,C> quantized;
+                kt::mxfp8_scale<R,C> scales;
+                kt::online_quantize_mxfp8(quantized,scales,rounded);
+                store_output_scales<R,C>(args.q.scales,scales,mr,nc,args.m,args.n);
+                // Reuse exactly the BF16 shared allocation. Only the issuing
+                // warp waits for TMA, then releases every writer via the barrier.
+                if(writer)kt::tma::store_async_read_wait<0>();
+                kt::warpgroup::sync(group+1);
+                kt::warpgroup::store(shared.output[group].q,quantized);
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                kt::warpgroup::sync(group+1);
+                if(writer) {
+                    kt::tma::store_async(args.q.out,shared.output[group].q,
+                                        {0,0,coord.x*8*R+group*4*R,nc});
+                    kt::tma::store_commit_group();
+                }
+            } else {
+                if(writer)kt::tma::store_async_read_wait<0>();
+                kt::warpgroup::sync(group+1);
+                kt::warpgroup::store(shared.output[group],accum);
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                kt::warpgroup::sync(group+1);
+                if(writer) {
+                    kt::tma::store_async(args.out,shared.output[group],
+                                        {0,0,coord.x*8*R+group*4*R,nc});
+                    kt::tma::store_commit_group();
+                }
             }
         }
         if(writer)kt::tma::store_async_wait<0>();
@@ -126,26 +167,39 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
 }
 static void mx_check(cudaError_t e){if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));}
 struct MXPlanBase {virtual ~MXPlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
-template<int R,int C,int BK,int S> struct MXPlan:MXPlanBase {
-    using CF=MXConfig<R,C,BK,S>;typename CF::Args args;int grid,regs;
-    MXPlan(void *a,void *b,void *as,void *bs,void *o,int m,int n,int k,int sms,int g):
+template<int R,int C,int BK,int S,bool SaveQ=false> struct MXPlan:MXPlanBase {
+    using CF=MXConfig<R,C,BK,S,SaveQ>;typename CF::Args args;int grid,regs;
+    static auto quantized_args(void *q,void *qs,int m,int n) {
+        if constexpr(SaveQ) {
+            static_assert(C%32==0);
+            if(!q||!qs)throw std::runtime_error("Missing quantized output");
+            // TK splits global columns into fixed-width swizzle panels. A
+            // partial final panel is not masked by its five-dimensional map.
+            if(n%CF::QTile::swizzle_bytes)
+                throw std::runtime_error("N must align to FP8 output TMA swizzle panels");
+            return typename CF::QuantizedArgs{
+                MXGlobal<typename CF::QTile>((kt::fp8e4m3*)q,1,1,m,n),(uint32_t*)qs};
+        } else return typename CF::NoQuantizedArgs{};
+    }
+    MXPlan(void *a,void *b,void *as,void *bs,void *o,int m,int n,int k,int sms,int g,
+           void *q=nullptr,void *qs=nullptr):
         args{MXGlobal<typename CF::ATile>((kt::fp8e4m3*)a,1,1,m,k),
              MXGlobal<typename CF::BTile>((kt::fp8e4m3*)b,1,1,n,k),
              MXGlobal<typename CF::OTile>((kt::bf16*)o,1,1,m,n),
              (uint32_t*)as,
              (uint8_t*)bs,m,n,(k+31)/32,(n+C-1)/C,(m+8*R-1)/(8*R),
              ((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,std::min(g,(m+8*R-1)/(8*R)),
-             uint32_t((m+15)/16*16)} {
+             uint32_t((m+15)/16*16),quantized_args(q,qs,m,n)} {
         if(k%CF::ATile::swizzle_bytes || k%CF::BTile::swizzle_bytes || n%(CF::OTile::swizzle_bytes/2))
             throw std::runtime_error("K/N must align to TMA swizzle panels");
         int dev;mx_check(cudaGetDevice(&dev));cudaDeviceProp prop;mx_check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S>));regs=attr.numRegs;
+        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ>));regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)throw std::runtime_error("Unexpected register pool or local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_mxfp8<R,C,BK,S><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
+        persistent_mxfp8<R,C,BK,S,SaveQ><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
 };
@@ -166,6 +220,22 @@ extern "C" void *tk_mx_create(void *a,void *b,void *as,void *bs,void *o,int m,in
 }
 extern "C" int tk_mx_launch(fp8gemm::MXPlanBase *p,void *s){
     try{p->launch((cudaStream_t)s);return 0;}catch(const std::exception &e){fp8gemm::mx_error=e.what();return -1;}
+}
+extern "C" void *tk_mx_create_quantized(void *a,void *b,void *as,void *bs,void *o,
+    void *q,void *qs,int m,int n,int k,int config,int sms,int g) {
+    using namespace fp8gemm;
+    try {
+        if(!a||!b||!as||!bs||!o||!q||!qs||m<=0||n<=0||k<=0||g<1)
+            throw std::runtime_error("Invalid arguments");
+#define CFG(I,R,C,K,S) case I: \
+        if constexpr(C%32==0) return new MXPlan<R,C,K,S,true>(a,b,as,bs,o,m,n,k,sms,g,q,qs); \
+        else throw std::runtime_error("Quantized epilogue requires C divisible by 32")
+        switch(config) {
+#include "mxfp8_configs.inc"
+            default:throw std::runtime_error("Invalid configuration");
+        }
+#undef CFG
+    }catch(const std::exception &e){mx_error=e.what();return nullptr;}
 }
 extern "C" void tk_mx_info(fp8gemm::MXPlanBase *p,int *d){p->info(d);}
 extern "C" void tk_mx_destroy(fp8gemm::MXPlanBase *p){delete p;}

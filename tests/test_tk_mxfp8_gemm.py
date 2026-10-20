@@ -11,7 +11,7 @@ def compiled():
     torch.set_num_threads(4)
     binary=OUTPUT/'libgemm.so'
     sources=[ROOT/'cuda/persistent_mxfp8_gemm.cu',ROOT/'cuda/mxfp8_configs.inc',ROOT/'cuda/fp8_shared_load.cuh',
-             ROOT/'cuda/tma_ring_pipe.cuh',ROOT/'cuda/linear_tma_buffer.cuh',
+             ROOT/'cuda/tma_ring_pipe.cuh',ROOT/'cuda/linear_tma_buffer.cuh',ROOT/'cuda/mxfp8_epilogue.cuh',
              *(ROOT/'third_party/thunderkittens/include').rglob('*.cuh')]
     if not binary.exists() or any(p.stat().st_mtime>binary.stat().st_mtime for p in sources):build()
 
