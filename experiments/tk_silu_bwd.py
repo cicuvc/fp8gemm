@@ -215,9 +215,14 @@ class SiluBwdQuantizePlan:
         )
         if not self.handle:
             raise RuntimeError(owner.lib.tk_silu_bwd_q_error().decode())
-        info = (ct.c_int * 2)()
+        info = (ct.c_int * 3)()
         owner.lib.tk_silu_bwd_q_info(self.handle, info)
-        self.info = {"blocks": info[0], "threads": info[1], "padded_m": mp}
+        self.info = {
+            "blocks": info[0],
+            "threads": info[1],
+            "shared_bytes": info[2],
+            "padded_m": mp,
+        }
 
     def __call__(self):
         status = self.owner.lib.tk_silu_bwd_q_launch(

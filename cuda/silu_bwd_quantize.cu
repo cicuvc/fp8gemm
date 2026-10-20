@@ -1,8 +1,9 @@
 // Fused BF16 SwiGLU backward and two-direction MXFP8 quantization.
-// Each warp owns one 32x32 element tile. Lane r holds the 32 BF16 values of
-// row r: the 1x32 scale is reduced entirely in-thread, while each 32x1 scale
-// uses one redux.sync.max.u32 across the warp. No BF16 gradients are written
-// to global memory; only E4M3 data and E8M0 scale bytes are stored.
+// Each warp walks 32x32 tiles. Inputs use a double-buffered cp.async pipeline:
+// a warp copies each tile into a transposed, padded shared layout using
+// half-warp-coalesced 4-byte transfers, then lane r reads row r without
+// shared-memory bank conflicts. No BF16 gradients are written to global
+// memory; only E4M3 data and E8M0 scales are stored.
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cstdint>
@@ -18,6 +19,14 @@ using fp8gemm::silu_bwd::cvt_e4m3x2_bf16x2;
 
 static thread_local std::string error;
 
+constexpr int kChunks=4;                  // 16-byte chunks in one row
+constexpr int kRowWords=16;               // 4-byte words in one row
+constexpr int kTileWords=32*kRowWords;
+constexpr int kInputs=3;
+constexpr int kStages=2;
+constexpr int kWarps=8;
+constexpr int kSharedBytes=kWarps*kStages*kInputs*kTileWords*sizeof(uint32_t);
+
 struct Args {
     const uint16_t *dy,*half_gate,*up;
     uint8_t *gate_row,*up_row,*gate_col,*up_col;
@@ -31,40 +40,97 @@ __device__ __forceinline__ uint32_t max_exponent(
     return max(current,(values>>16)&0x7f80u);
 }
 
-__global__ __launch_bounds__(128) void silu_bwd_quantize_kernel(Args args) {
-    int warp=threadIdx.x/32,lane=threadIdx.x&31;
-    int tile=blockIdx.x*4+warp;
-    if(tile>=args.total_tiles)return;
-    int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
-    int row=tile_row*32+lane,col=tile_col*32;
+__device__ __forceinline__ void cp_async_16(void *dst,const void *src) {
+    uint32_t shared=uint32_t(__cvta_generic_to_shared(dst));
+    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
+                 :: "r"(shared), "l"(src) : "memory");
+}
 
-    uint32_t dy_values[16]={0},half_gate_values[16]={0},up_values_in[16]={0};
-    if(row<args.m) {
-        auto load16=[&](const uint16_t *source,uint32_t (&dst)[16]) {
-            const uint4 *src=reinterpret_cast<const uint4*>(
-                source+size_t(row)*args.n+col);
-            uint4 a=src[0],b=src[1],c=src[2],d=src[3];
-            uint32_t values[16]={a.x,a.y,a.z,a.w,b.x,b.y,b.z,b.w,
-                                 c.x,c.y,c.z,c.w,d.x,d.y,d.z,d.w};
+__device__ __forceinline__ void cp_async_commit() {
+    asm volatile("cp.async.commit_group;" ::: "memory");
+}
+
+template<int Pending>
+__device__ __forceinline__ void cp_async_wait() {
+    asm volatile("cp.async.wait_group %0;" :: "n"(Pending) : "memory");
+}
+
+// Shared layout is row-major with a four-way XOR swizzle at 16-byte chunk
+// granularity. Two lanes groups copy one contiguous 64-byte row segment.
+__device__ __forceinline__ void load_tile(
+    uint32_t *shared,const Args &args,int tile,int lane) {
+    int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
+    int block_row=tile_row*32,block_col=tile_col*32;
+    uint32_t *dy_src=shared;
+    uint32_t *half_gate_src=shared+kTileWords;
+    uint32_t *up_src=shared+2*kTileWords;
 #pragma unroll
-            for(int i=0;i<16;i++)dst[i]=values[i];
-        };
-        load16(args.dy,dy_values);
-        load16(args.half_gate,half_gate_values);
-        load16(args.up,up_values_in);
+    for(int iteration=0;iteration<4;iteration++) {
+        int linear=lane+iteration*32;
+        int row=linear/kChunks;
+        int chunk=linear%kChunks;
+        int destination_chunk=chunk^(row&3);
+        int global_row=block_row+row;
+        size_t global_col=size_t(block_col+chunk*8);
+        uint32_t *dst=dy_src+row*kRowWords+destination_chunk*4;
+        if(global_row<args.m) {
+            cp_async_16(dst,args.dy+size_t(global_row)*args.n+global_col);
+            cp_async_16(up_src+row*kRowWords+destination_chunk*4,
+                       args.up+size_t(global_row)*args.n+global_col);
+            cp_async_16(half_gate_src+row*kRowWords+destination_chunk*4,
+                       args.half_gate+size_t(global_row)*args.n+global_col);
+        } else {
+            *reinterpret_cast<uint4*>(dst)=uint4{0,0,0,0};
+            *reinterpret_cast<uint4*>(
+                up_src+row*kRowWords+destination_chunk*4)=uint4{0,0,0,0};
+            *reinterpret_cast<uint4*>(
+                half_gate_src+row*kRowWords+destination_chunk*4)=uint4{0,0,0,0};
+        }
     }
+    cp_async_commit();
+}
+
+__device__ __forceinline__ void process_tile(
+    const uint32_t *shared,const Args &args,int tile,int lane) {
+    int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
+    int block_row=tile_row*32,block_col=tile_col*32;
+    int row=block_row+lane;
+    const uint32_t *dy_src=shared;
+    const uint32_t *half_gate_src=shared+kTileWords;
+    const uint32_t *up_src=shared+2*kTileWords;
 
     uint32_t gate_values[16],up_values[16];
     uint32_t gate_exponent=0,up_exponent=0;
 #pragma unroll
-    for(int pair=0;pair<16;pair++) {
-        PairGrad grad=backward_pair(
-            dy_values[pair],half_gate_values[pair],up_values_in[pair]);
-        gate_values[pair]=grad.gate;
-        up_values[pair]=grad.up;
+    for(int vector=0;vector<4;vector++) {
+        int chunk=vector^(lane&3);
+        uint4 dy=reinterpret_cast<const uint4*>(
+            dy_src+lane*kRowWords)[chunk];
+        uint4 half_gate=reinterpret_cast<const uint4*>(
+            half_gate_src+lane*kRowWords)[chunk];
+        uint4 up=reinterpret_cast<const uint4*>(
+            up_src+lane*kRowWords)[chunk];
+        PairGrad p0=backward_pair(dy.x,half_gate.x,up.x);
+        PairGrad p1=backward_pair(dy.y,half_gate.y,up.y);
+        PairGrad p2=backward_pair(dy.z,half_gate.z,up.z);
+        PairGrad p3=backward_pair(dy.w,half_gate.w,up.w);
+        gate_values[vector*4]=p0.gate;
+        gate_values[vector*4+1]=p1.gate;
+        gate_values[vector*4+2]=p2.gate;
+        gate_values[vector*4+3]=p3.gate;
+        up_values[vector*4]=p0.up;
+        up_values[vector*4+1]=p1.up;
+        up_values[vector*4+2]=p2.up;
+        up_values[vector*4+3]=p3.up;
         if(row<args.m) {
-            gate_exponent=max_exponent(grad.gate,gate_exponent);
-            up_exponent=max_exponent(grad.up,up_exponent);
+            gate_exponent=max_exponent(p0.gate,gate_exponent);
+            gate_exponent=max_exponent(p1.gate,gate_exponent);
+            gate_exponent=max_exponent(p2.gate,gate_exponent);
+            gate_exponent=max_exponent(p3.gate,gate_exponent);
+            up_exponent=max_exponent(p0.up,up_exponent);
+            up_exponent=max_exponent(p1.up,up_exponent);
+            up_exponent=max_exponent(p2.up,up_exponent);
+            up_exponent=max_exponent(p3.up,up_exponent);
         }
     }
 
@@ -80,9 +146,9 @@ __global__ __launch_bounds__(128) void silu_bwd_quantize_kernel(Args args) {
                 bf16x2_scale(up_values[pair],up_row_exp));
         }
         auto *gate_dst=reinterpret_cast<uint4*>(
-            args.gate_row+size_t(row)*args.n+col);
+            args.gate_row+size_t(row)*args.n+block_col);
         auto *up_dst=reinterpret_cast<uint4*>(
-            args.up_row+size_t(row)*args.n+col);
+            args.up_row+size_t(row)*args.n+block_col);
 #pragma unroll
         for(int vector=0;vector<2;vector++) {
             int pair=vector*8;
@@ -97,15 +163,14 @@ __global__ __launch_bounds__(128) void silu_bwd_quantize_kernel(Args args) {
         }
     }
 
-    int block_row=tile_row*32;
     if(row<args.mp16) {
         size_t offset=size_t(tile_col/4)*args.mp16*4+size_t(row)*4+(tile_col&3);
         args.gate_row_scale[offset]=gate_row_exp;
         args.up_row_scale[offset]=up_row_exp;
     }
 
-    // One redux per feature produces the 32x1 scale. Even lanes then pair
-    // adjacent rows and use one packed BF16 multiply + FP8 conversion.
+    // One redux per feature produces the 32x1 scale. Even lanes pair
+    // adjacent rows for packed BF16 scaling and E4M3 conversion.
 #pragma unroll
     for(int pair=0;pair<16;pair++) {
 #pragma unroll
@@ -118,7 +183,7 @@ __global__ __launch_bounds__(128) void silu_bwd_quantize_kernel(Args args) {
                 0xffffffffu,up_value&0x7f80u);
             uint32_t gate_next=__shfl_down_sync(0xffffffffu,gate_value,1);
             uint32_t up_next=__shfl_down_sync(0xffffffffu,up_value,1);
-            int feature=col+pair*2+half;
+            int feature=block_col+pair*2+half;
             if(lane==0) {
                 size_t offset=
                     size_t(tile_row/4)*args.n*4+size_t(feature)*4+(tile_row&3);
@@ -137,6 +202,30 @@ __global__ __launch_bounds__(128) void silu_bwd_quantize_kernel(Args args) {
                 *reinterpret_cast<uint16_t*>(args.up_col+index)=up_q;
             }
         }
+    }
+}
+
+__global__ __launch_bounds__(256) void silu_bwd_quantize_kernel(Args args) {
+    extern __shared__ __align__(16) uint8_t storage[];
+    int warp=threadIdx.x/32,lane=threadIdx.x&31;
+    int stride=gridDim.x*kWarps;
+    int tile=blockIdx.x*kWarps+warp;
+    if(tile>=args.total_tiles)return;
+    auto *warp_shared=reinterpret_cast<uint32_t*>(
+        storage+warp*kStages*kInputs*kTileWords*sizeof(uint32_t));
+
+    int stage=0,next=tile+stride;
+    load_tile(warp_shared,args,tile,lane);
+    while(tile<args.total_tiles) {
+        bool has_next=next<args.total_tiles;
+        if(has_next)
+            load_tile(warp_shared+kInputs*kTileWords,args,next,lane);
+        if(has_next)cp_async_wait<1>();
+        else cp_async_wait<0>();
+        __syncwarp();
+        process_tile(warp_shared+stage*kInputs*kTileWords,args,tile,lane);
+        __syncwarp();
+        tile=next;next+=stride;stage^=1;
     }
 }
 
@@ -165,10 +254,17 @@ struct Plan {
             static_cast<uint8_t*>(gate_col_scale),
             static_cast<uint8_t*>(up_col_scale),
             m,n,(m+127)/128*128,(m+15)/16*16,n/32,n/32,
-            (n/32)*((m+127)/128*128/32)},
-        blocks{(args.total_tiles+3)/4} {}
+            (n/32)*((m+127)/128*128/32)} {
+        int device;check(cudaGetDevice(&device));
+        cudaDeviceProp properties;check(cudaGetDeviceProperties(&properties,device));
+        int tile_blocks=(args.total_tiles+kWarps-1)/kWarps;
+        blocks=std::min(tile_blocks,properties.multiProcessorCount);
+        check(cudaFuncSetAttribute(
+            silu_bwd_quantize_kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,
+            kSharedBytes));
+    }
     void launch(cudaStream_t stream) {
-        silu_bwd_quantize_kernel<<<blocks,128,0,stream>>>(args);
+        silu_bwd_quantize_kernel<<<blocks,256,kSharedBytes,stream>>>(args);
     }
 };
 
@@ -211,7 +307,7 @@ extern "C" int tk_silu_bwd_q_launch(void*opaque,void*stream) {
 
 extern "C" void tk_silu_bwd_q_info(void*opaque,int*out) {
     auto *plan=static_cast<fp8gemm::silu_bwd_quantize::Plan*>(opaque);
-    out[0]=plan->blocks;out[1]=128;
+    out[0]=plan->blocks;out[1]=256;out[2]=fp8gemm::silu_bwd_quantize::kSharedBytes;
 }
 
 extern "C" void tk_silu_bwd_q_destroy(void*opaque) {

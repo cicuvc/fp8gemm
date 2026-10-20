@@ -292,6 +292,12 @@ def test_quantized_codegen():
             section,
         )
     )
-    for opcode in ["HFMA2.BF16_V2", "HMUL2.BF16_V2", "MUFU.TANH.BF16", "REDUX.MAX"]:
+    for opcode in [
+        "HFMA2.BF16_V2",
+        "HMUL2.BF16_V2",
+        "MUFU.TANH.BF16",
+        "REDUX.MAX",
+    ]:
         assert instructions[opcode] > 0
+    assert any(opcode.startswith("LDGSTS.") for opcode in instructions)
     assert not any(op.startswith(("LDL", "STL")) for op in instructions)
