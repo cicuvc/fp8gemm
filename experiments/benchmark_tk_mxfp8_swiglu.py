@@ -15,7 +15,6 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-RESULT = ROOT / "benchmarks/tk_mxfp8_swiglu_rtx5090.json"
 
 from experiments.tk_mxfp8_gemm import Library as GemmLibrary, pack_a_scales
 from experiments.tk_mxfp8_swiglu import (
@@ -114,23 +113,29 @@ def audit_sass():
             "qmma": sum(value for op, value in ops.items() if op.startswith("QMMA")),
             "tanh": sum(value for op, value in ops.items() if op.startswith("MUFU.TANH")),
         }
-    assert len(result) == len(CONFIGS)
+    assert len(result) == 2 * len(CONFIGS)
+    assert sum("ELb1EEE" in name for name in result) == len(CONFIGS)
+    assert sum("ELb0EEE" in name for name in result) == len(CONFIGS)
     return result
 
 
-def benchmark_shape(m, n, k, rounds, repeats, include_bf16):
+def benchmark_shape(m, n, k, rounds, repeats, include_bf16, store_aux):
     data = operands(m, n, k)
     fused_lib = MXFP8SwiGLULibrary()
     gemm_lib = GemmLibrary()
     functions = {}
     metadata = {}
     fused_outputs = {}
+    fused_out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+    gate_linear = (
+        torch.empty((m, n), device="cuda", dtype=torch.bfloat16) if store_aux else None
+    )
+    up_linear = torch.empty_like(gate_linear) if store_aux else None
 
     for config, (_, _, _, block_k, _) in enumerate(CONFIGS):
         if k % block_k or n % 64:
             continue
         for raster_group in [1, 8, 13]:
-            out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
             plan = fused_lib.plan(
                 data["x"],
                 data["x_scale"],
@@ -139,10 +144,16 @@ def benchmark_shape(m, n, k, rounds, repeats, include_bf16):
                 data["up"],
                 data["up_scale"],
                 config=config,
-                out=out,
+                out=fused_out,
+                gate_out=gate_linear,
+                up_out=up_linear,
                 raster_group=raster_group,
             )
-            name = f"fused_c{config}_g{raster_group}"
+            name = (
+                f"fused_aux_c{config}_g{raster_group}"
+                if store_aux
+                else f"fused_c{config}_g{raster_group}"
+            )
             functions[name] = plan
             metadata[name] = plan.info
             fused_outputs[name] = plan
@@ -228,7 +239,11 @@ def benchmark_shape(m, n, k, rounds, repeats, include_bf16):
         if name in errors:
             row.update(errors[name])
 
-    fused_names = [name for name in timing if name.startswith("fused_c")]
+    fused_names = [
+        name
+        for name in timing
+        if name.startswith("fused_aux_c" if store_aux else "fused_c")
+    ]
     pure_names = [
         name for name in timing if name.startswith("two_gemm_plus_epilogue_c")
     ]
@@ -250,12 +265,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--no-bf16-baseline", action="store_true")
+    parser.add_argument("--aux", action="store_true")
     parser.add_argument("--rounds", type=int, default=7)
     parser.add_argument("--repeats", type=int, default=24)
     parser.add_argument("--m", type=int, default=None)
     parser.add_argument("--n", type=int, default=None)
     parser.add_argument("--k", type=int, default=None)
     args = parser.parse_args()
+    result_path = ROOT / (
+        "benchmarks/tk_mxfp8_swiglu_aux_rtx5090.json"
+        if args.aux
+        else "benchmarks/tk_mxfp8_swiglu_rtx5090.json"
+    )
     torch.set_num_threads(4)
     if not args.skip_build:
         build()
@@ -283,12 +304,19 @@ def main():
             "MXFP8 paths. Fused candidates scan raster groups 1/8/13. FLOPs "
             "count both gate and up GEMMs; the SiLU epilogue is not counted."
         ),
+        "store_aux": args.aux,
         "sass": audit_sass(),
         "benchmarks": [],
     }
     for m, n, k in shapes:
         row = benchmark_shape(
-            m, n, k, args.rounds, args.repeats, not args.no_bf16_baseline
+            m,
+            n,
+            k,
+            args.rounds,
+            args.repeats,
+            not args.no_bf16_baseline,
+            args.aux,
         )
         result["benchmarks"].append(row)
         best = row["timings"][row["best_fused"]]
@@ -302,7 +330,7 @@ def main():
         )
         serialized = json.dumps(result, indent=2) + "\n"
         (OUTPUT / "result.json").write_text(serialized)
-        RESULT.write_text(serialized)
+        result_path.write_text(serialized)
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -318,7 +346,7 @@ def main():
     result["nvidia_smi"] = subprocess.check_output(["nvidia-smi"], text=True)
     serialized = json.dumps(result, indent=2) + "\n"
     (OUTPUT / "result.json").write_text(serialized)
-    RESULT.write_text(serialized)
+    result_path.write_text(serialized)
 
 
 if __name__ == "__main__":

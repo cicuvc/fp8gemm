@@ -2,6 +2,8 @@
 
 ``x`` is E4M3 [M,K] with one E8M0 scale per row/K32. The gate and up weights
 use the usual 32x32 block-scale layout. The fused result is BF16 [M,N].
+Optionally, the raw pre-activation gate/up linear outputs are also written as
+BF16 through asynchronous TMA stores for the backward pass.
 """
 import ctypes as ct
 from pathlib import Path
@@ -54,6 +56,11 @@ class MXFP8SwiGLULibrary:
         self.lib = ct.CDLL(str(Path(output).resolve() / "libswiglu.so"))
         self.lib.tk_mx_swiglu_create.argtypes = [ct.c_void_p] * 7 + [ct.c_int] * 6
         self.lib.tk_mx_swiglu_create.restype = ct.c_void_p
+        if hasattr(self.lib, "tk_mx_swiglu_create_aux"):
+            self.lib.tk_mx_swiglu_create_aux.argtypes = (
+                [ct.c_void_p] * 9 + [ct.c_int] * 6
+            )
+            self.lib.tk_mx_swiglu_create_aux.restype = ct.c_void_p
         self.lib.tk_mx_swiglu_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         self.lib.tk_mx_swiglu_launch.restype = ct.c_int
         self.lib.tk_mx_swiglu_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
@@ -70,6 +77,8 @@ class MXFP8SwiGLULibrary:
         up_scale,
         config=3,
         out=None,
+        gate_out=None,
+        up_out=None,
         sms=0,
         raster_group=1,
     ):
@@ -83,6 +92,8 @@ class MXFP8SwiGLULibrary:
             up_scale,
             config,
             out,
+            gate_out,
+            up_out,
             sms,
             raster_group,
         )
@@ -102,6 +113,8 @@ class MXFP8SwiGLUPlan:
         up_scale,
         config,
         out,
+        gate_out,
+        up_out,
         sms,
         raster_group,
     ):
@@ -133,28 +146,48 @@ class MXFP8SwiGLUPlan:
             or not out.is_contiguous()
         ):
             raise ValueError("Invalid output buffer")
+        if (gate_out is None) != (up_out is None):
+            raise ValueError("gate_out and up_out must be supplied together")
+        aux_outputs = [] if gate_out is None else [gate_out, up_out]
+        for tensor in aux_outputs:
+            if (
+                tensor.shape != (m, n)
+                or tensor.dtype != torch.bfloat16
+                or tensor.device != x.device
+                or not tensor.is_contiguous()
+            ):
+                raise ValueError("Invalid gate/up linear output buffer")
         inputs = [x, x_scale, gate, gate_scale, up, up_scale]
-        tensors = inputs + [out]
+        outputs = [out, *aux_outputs]
+        tensors = inputs + outputs
         if not x.is_cuda or any(
             tensor.device != x.device or not tensor.is_contiguous()
             for tensor in tensors
         ):
             raise ValueError("Expected contiguous tensors on one CUDA device")
-        if any(tensor.data_ptr() % 16 for tensor in [x, gate, up, out]):
+        if any(tensor.data_ptr() % 16 for tensor in [x, gate, up, *outputs]):
             raise ValueError("TMA tensor pointers must be 16-byte aligned")
-        lo, hi = out.data_ptr(), out.data_ptr() + out.numel() * out.element_size()
-        if any(
-            lo < tensor.data_ptr() + tensor.numel() * tensor.element_size()
-            and tensor.data_ptr() < hi
-            for tensor in inputs
-        ):
-            raise ValueError("Output aliases an input")
+        for index, output in enumerate(outputs):
+            lo = output.data_ptr()
+            hi = lo + output.numel() * output.element_size()
+            if any(
+                lo < tensor.data_ptr() + tensor.numel() * tensor.element_size()
+                and tensor.data_ptr() < hi
+                for tensor in inputs + outputs[:index]
+            ):
+                raise ValueError("Output buffers must not overlap inputs or each other")
         self.owner = owner
         self.x, self.x_scale = x, x_scale
         self.gate, self.gate_scale = gate, gate_scale
         self.up, self.up_scale, self.out = up, up_scale, out
+        self.gate_out, self.up_out = gate_out, up_out
         with torch.cuda.device(x.device):
-            self.handle = owner.lib.tk_mx_swiglu_create(
+            create = (
+                owner.lib.tk_mx_swiglu_create
+                if gate_out is None
+                else owner.lib.tk_mx_swiglu_create_aux
+            )
+            pointers = [
                 x.data_ptr(),
                 x_scale.data_ptr(),
                 gate.data_ptr(),
@@ -162,6 +195,11 @@ class MXFP8SwiGLUPlan:
                 up.data_ptr(),
                 up_scale.data_ptr(),
                 out.data_ptr(),
+            ]
+            if gate_out is not None:
+                pointers.extend([gate_out.data_ptr(), up_out.data_ptr()])
+            self.handle = create(
+                *pointers,
                 m,
                 n,
                 k,
@@ -171,15 +209,15 @@ class MXFP8SwiGLUPlan:
             )
         if not self.handle:
             raise RuntimeError(owner.lib.tk_mx_swiglu_error().decode())
-        info = (ct.c_int * 8)()
+        info = (ct.c_int * 10)()
         owner.lib.tk_mx_swiglu_info(self.handle, info)
-        self.info = dict(
-            zip(
-                ["R", "C", "BK", "stages", "shared_bytes", "initial_regs", "grid"],
-                info,
-            )
-        )
+        self.info = dict(zip(
+            ["R", "C", "BK", "stages", "shared_bytes", "initial_regs", "grid"],
+            info[:7],
+        ))
         self.info["raster_group"] = info[7]
+        self.info["store_aux"] = bool(info[8])
+        self.info["aux_buffers"] = info[9]
 
     def __call__(self):
         with torch.cuda.device(self.x.device):

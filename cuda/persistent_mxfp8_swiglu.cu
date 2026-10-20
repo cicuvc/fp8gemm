@@ -26,7 +26,7 @@ __device__ __forceinline__ float swiglu(float gate_half,float up) {
     return fmaf(gate_half,t,gate_half)*up;
 }
 
-template<int R,int C,int BK,int S> struct Config {
+template<int R,int C,int BK,int S,bool Aux> struct Config {
     using ATile=kt::st_fp8e4m3<4*R,BK>;
     using BTile=kt::st_fp8e4m3<C,BK>;
     using OTile=kt::st_bf<4*R,C>;
@@ -34,27 +34,34 @@ template<int R,int C,int BK,int S> struct Config {
         ATile a[2];
         BTile gate,up;
     };
+    static constexpr int max_smem=101376;
+    // Two tiles per consumer let gate and up TMA stores overlap. Fall back
+    // to one tile, with serialized async stores plus read waits, when adding
+    // the second tile would exceed the SM120 shared-memory limit.
+    static constexpr int output_buffers=
+        Aux && 1024+S*sizeof(Packet)+2*sizeof(OTile)+2*sizeof(OTile)<=max_smem
+        ?2:1;
     struct Shared {
         Packet input[S];
-        OTile output[2];
+        OTile output[2][output_buffers];
     };
     struct Args {
         Global<ATile> a;
         Global<BTile> gate,up;
-        Global<OTile> out;
+        Global<OTile> out,gate_linear,up_linear;
         const uint32_t *as; // [ceil(K/128),roundup(M,16)] packed E8M0 words
         const uint8_t *gs,*us; // [ceil(N/32),ceil(K/32)] E8M0 bytes
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
         uint32_t as_stride;
     };
     static constexpr int smem=1024+sizeof(Shared);
-    static_assert(smem<=101376);
+    static_assert(smem<=max_smem);
 };
 
-template<int R,int C,int BK,int S>
+template<int R,int C,int BK,int S,bool Aux>
 __global__ __launch_bounds__(384,1) void persistent_swiglu(
-    const __grid_constant__ typename Config<R,C,BK,S>::Args args) {
-    using CF=Config<R,C,BK,S>;
+    const __grid_constant__ typename Config<R,C,BK,S,Aux>::Args args) {
+    using CF=Config<R,C,BK,S,Aux>;
     using Shared=typename CF::Shared;
     constexpr int SR=(C+31)/32,SC=BK/32;
     extern __shared__ __align__(1024) unsigned char storage[];
@@ -153,6 +160,51 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
                 kt::warp::wmma::mma_ABt_block_scaled(gate_acc,ar,gr,gate_acc,half_as,gs);
                 kt::warp::wmma::mma_ABt_block_scaled(up_acc,ar,ur,up_acc,as,us);
             }
+            kt::rt_bf<R,C> rounded;
+            if constexpr(Aux) {
+                // Reconstruct the original gate projection exactly: the QMMA
+                // accumulated 0.5*g through the decremented E8M0 scale.
+                kt::rt_bf<R,C> gate_linear;
+#pragma unroll
+                for(int r=0;r<gate_acc.height;r++) {
+#pragma unroll
+                    for(int c=0;c<gate_acc.width;c++) {
+#pragma unroll
+                        for(int i=0;i<gate_acc.packed_per_tile;i++) {
+                            float2 g=gate_acc.tiles[r][c].data[i];
+                            gate_linear.tiles[r][c].data[i]=
+                                __floats2bfloat162_rn(2.f*g.x,2.f*g.y);
+                        }
+                    }
+                }
+                if(writer)kt::tma::store_async_read_wait<0>();
+                kt::warpgroup::sync(group+1);
+                kt::warpgroup::store(shared.output[group][0],gate_linear);
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                kt::warpgroup::sync(group+1);
+                if(writer) {
+                    kt::tma::store_async(args.gate_linear,shared.output[group][0],
+                                        {0,0,coord.x*8*R+group*4*R,nc});
+                    kt::tma::store_commit_group();
+                }
+
+                kt::rt_bf<R,C> up_linear;
+                kt::warp::copy(up_linear,up_acc);
+                if constexpr(CF::output_buffers==1) {
+                    if(writer)kt::tma::store_async_read_wait<0>();
+                    kt::warpgroup::sync(group+1);
+                }
+                kt::warpgroup::store(shared.output[group][CF::output_buffers-1],up_linear);
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                kt::warpgroup::sync(group+1);
+                if(writer) {
+                    kt::tma::store_async(args.up_linear,
+                                        shared.output[group][CF::output_buffers-1],
+                                        {0,0,coord.x*8*R+group*4*R,nc});
+                    kt::tma::store_commit_group();
+                }
+            }
+
 #pragma unroll
             for(int r=0;r<gate_acc.height;r++) {
 #pragma unroll
@@ -165,15 +217,14 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
                     }
                 }
             }
-            kt::rt_bf<R,C> rounded;
             kt::warp::copy(rounded,gate_acc);
             if(writer)kt::tma::store_async_read_wait<0>();
             kt::warpgroup::sync(group+1);
-            kt::warpgroup::store(shared.output[group],rounded);
+            kt::warpgroup::store(shared.output[group][0],rounded);
             asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
             kt::warpgroup::sync(group+1);
             if(writer) {
-                kt::tma::store_async(args.out,shared.output[group],
+                kt::tma::store_async(args.out,shared.output[group][0],
                                     {0,0,coord.x*8*R+group*4*R,nc});
                 kt::tma::store_commit_group();
             }
@@ -189,16 +240,18 @@ static void check(cudaError_t e) {
 
 struct PlanBase {virtual ~PlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
 
-template<int R,int C,int BK,int S> struct Plan final:PlanBase {
-    using CF=Config<R,C,BK,S>;
+template<int R,int C,int BK,int S,bool Aux> struct Plan final:PlanBase {
+    using CF=Config<R,C,BK,S,Aux>;
     typename CF::Args args;
     int grid,regs;
-    Plan(void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,
+    Plan(void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo,
          int m,int n,int k,int sms,int raster_group):args{
         Global<typename CF::ATile>(static_cast<kt::fp8e4m3*>(x),1,1,m,k),
         Global<typename CF::BTile>(static_cast<kt::fp8e4m3*>(g),1,1,n,k),
         Global<typename CF::BTile>(static_cast<kt::fp8e4m3*>(u),1,1,n,k),
         Global<typename CF::OTile>(static_cast<kt::bf16*>(o),1,1,m,n),
+        Global<typename CF::OTile>(static_cast<kt::bf16*>(Aux?go:o),1,1,m,n),
+        Global<typename CF::OTile>(static_cast<kt::bf16*>(Aux?uo:o),1,1,m,n),
         static_cast<uint32_t*>(xs),
         static_cast<uint8_t*>(gs),
         static_cast<uint8_t*>(us),
@@ -212,25 +265,35 @@ template<int R,int C,int BK,int S> struct Plan final:PlanBase {
         int dev;check(cudaGetDevice(&dev));
         cudaDeviceProp prop;check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        check(cudaFuncSetAttribute(persistent_swiglu<R,C,BK,S>,
+        check(cudaFuncSetAttribute(persistent_swiglu<R,C,BK,S,Aux>,
                                    cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
         cudaFuncAttributes attr;
-        check(cudaFuncGetAttributes(&attr,persistent_swiglu<R,C,BK,S>));
+        check(cudaFuncGetAttributes(&attr,persistent_swiglu<R,C,BK,S,Aux>));
         regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)
             throw std::runtime_error("Unexpected register pool or local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_swiglu<R,C,BK,S><<<grid,384,CF::smem,stream>>>(args);
+        persistent_swiglu<R,C,BK,S,Aux><<<grid,384,CF::smem,stream>>>(args);
         check(cudaGetLastError());
     }
     void info(int *d) override {
         d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;
-        d[5]=regs;d[6]=grid;d[7]=args.raster_group;
+        d[5]=regs;d[6]=grid;d[7]=args.raster_group;d[8]=Aux;d[9]=CF::output_buffers;
     }
 };
 
 static thread_local std::string error;
+template<bool Aux> PlanBase*create(
+    void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo,
+    int m,int n,int k,int config,int sms,int raster_group) {
+#define CFG(I,R,C,K,S) case I:return new Plan<R,C,K,S,Aux>(x,xs,g,gs,u,us,o,go,uo,m,n,k,sms,raster_group)
+    switch(config) {
+#include "mxfp8_swiglu_configs.inc"
+        default:throw std::runtime_error("Invalid configuration");
+    }
+#undef CFG
+}
 }
 
 extern "C" const char *tk_mx_swiglu_error(){return fp8gemm::mxswiglu::error.c_str();}
@@ -241,12 +304,20 @@ extern "C" void *tk_mx_swiglu_create(
     try {
         if(!x||!xs||!g||!gs||!u||!us||!o||m<=0||n<=0||k<=0||raster_group<1)
             throw std::runtime_error("Invalid arguments");
-#define CFG(I,R,C,K,S) case I:return new Plan<R,C,K,S>(x,xs,g,gs,u,us,o,m,n,k,sms,raster_group)
-        switch(config) {
-#include "mxfp8_swiglu_configs.inc"
-            default:throw std::runtime_error("Invalid configuration");
-        }
-#undef CFG
+        return create<false>(x,xs,g,gs,u,us,o,o,o,m,n,k,config,sms,raster_group);
+    }catch(const std::exception &e) {
+        error=e.what();return nullptr;
+    }
+}
+extern "C" void *tk_mx_swiglu_create_aux(
+    void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo,
+    int m,int n,int k,int config,int sms,int raster_group) {
+    using namespace fp8gemm::mxswiglu;
+    try {
+        if(!x||!xs||!g||!gs||!u||!us||!o||!go||!uo||
+           m<=0||n<=0||k<=0||raster_group<1)
+            throw std::runtime_error("Invalid arguments");
+        return create<true>(x,xs,g,gs,u,us,o,go,uo,m,n,k,config,sms,raster_group);
     }catch(const std::exception &e) {
         error=e.what();return nullptr;
     }
