@@ -2,15 +2,19 @@
 import ctypes as ct
 from pathlib import Path
 import subprocess
+import re
 import torch
-from experiments.tk_persistent_gemm import ROOT, FLAGS, CONFIGS
+from experiments.tk_persistent_gemm import ROOT, FLAGS
+CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
+    r'^CFG\((\d+),(\d+),(\d+),(\d+),(\d+)\);',
+    (ROOT/'cuda/mxfp8_configs.inc').read_text(),re.M)]
 OUTPUT=ROOT/'runs/tk_mxfp8_gemm'
 def build():
     OUTPUT.mkdir(parents=True,exist_ok=True)
     with (OUTPUT/'build.log').open('w') as log:
         subprocess.run(['/usr/local/cuda/bin/nvcc',*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_mxfp8_gemm.cu','-lcuda','-o',str(OUTPUT/'libgemm.so')],
-                       cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)
+                       cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=600)
 def pack_a_scales(scales):
     """Convert [M,ceil(K/32)] uint8 exponents to TMA-friendly four-byte words."""
     m,k=scales.shape
@@ -20,8 +24,8 @@ def pack_a_scales(scales):
     return words.T.contiguous()
 
 class Library:
-    def __init__(self):
-        self.lib=ct.CDLL(str(OUTPUT/'libgemm.so'))
+    def __init__(self,output=OUTPUT):
+        self.lib=ct.CDLL(str(Path(output)/'libgemm.so'))
         self.lib.tk_mx_create.argtypes=[ct.c_void_p]*5+[ct.c_int]*6
         self.lib.tk_mx_create.restype=ct.c_void_p
         self.lib.tk_mx_error.restype=ct.c_char_p

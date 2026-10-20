@@ -1,0 +1,14 @@
+========= COMPUTE-SANITIZER
+(16, 32, 4, False) PASS 
+(16, 64, 4, False) PASS 
+(16, 128, 4, False) PASS 
+(32, 64, 4, False) PASS 
+(32, 128, 4, False) PASS 
+(32, 256, 4, False) PASS 
+(32, 32, 1, True) PASS 
+(64, 32, 1, True) PASS 
+(64, 64, 1, True) PASS 
+(128, 64, 1, True) PASS 
+(128, 128, 1, True) PASS 
+(64, 256, 1, True) PASS 
+========= ERROR SUMMARY: 0 errors

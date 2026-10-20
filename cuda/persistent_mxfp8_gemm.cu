@@ -1,12 +1,11 @@
 // Matched ablation of persistent_fp8_gemm: prequantized A/B, no online quantization.
 #include "kittens.cuh"
 #include "tma_ring_pipe.cuh"
-#include "linear_tma_buffer.cuh"
+#include "fp8_shared_load.cuh"
 #include <stdexcept>
 #include <string>
 namespace fp8gemm {
 template<class T> using MXGlobal=kt::gl<typename T::dtype,-1,-1,-1,-1,T>;
-template<class T> using MXLinearGlobal=kt::gl<typename T::dtype,-1,-1,-1,-1,kt::tma::descriptor<T,false>>;
 __device__ __forceinline__ int2 mx_raster(int task,int ntiles,int mtiles,int g) {
     if(g==1)return make_int2(task/ntiles,task%ntiles);
     int span=g*ntiles,first=task/span*g,rows=min(g,mtiles-first),local=task%span;
@@ -16,22 +15,36 @@ template<int R,int C,int BK,int S> struct MXConfig {
     using ATile=kt::st_fp8e4m3<4*R,BK>;
     using BTile=kt::st_fp8e4m3<C,BK>;
     using OTile=kt::st_bf<4*R,C>;
-    using STile=LinearTile<float,1,4*R>; // Bitwise uint32: four K32 E8M0 bytes per row.
     static constexpr int SC=BK/32,SR=(C+31)/32;
     struct Packet {
         ATile a[2];BTile b;
-        STile as[2];
-        uint32_t bs[SR][SC];
     };
     struct Shared {Packet input[S];OTile output[2];};
     struct Args {
         MXGlobal<ATile> a;MXGlobal<BTile> b;MXGlobal<OTile> out;
-        MXLinearGlobal<STile> as; // packed [ceil(K/128),roundup(M,16)] uint32 words
+        const uint32_t *as; // packed [ceil(K/128),roundup(M,16)] uint32 words
         const uint8_t *bs; // bs[ceil(N/32),K/32]
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
+        uint32_t as_stride;
     };
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
+    struct ScalePrefetch {
+        uint32_t a[R/16],b;
+        __device__ __forceinline__ void load(const Args &args,int mr,int nc,int k,int lane) {
+#pragma unroll
+            for(int i=0;i<R/16;i++) {
+                int row=mr+i*16+lane/4+8*(lane&1);
+                a[i]=(row<args.m && k<args.ktiles)
+                    ?args.as[size_t(uint32_t(k)*SC/4)*args.as_stride+uint32_t(row)]:0;
+            }
+            // Each lane fetches one byte; consumers broadcast the small set
+            // of distinct B scales with shuffles after the prefetch latency.
+            int row=nc/32+(lane/SC)%SR,col=k*SC+lane%SC;
+            b=(row<(args.n+31)/32 && col<args.sc)
+                ?args.bs[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
+        }
+    };
 };
 template<int R,int C,int BK,int S>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
@@ -52,18 +65,12 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
                 int mr=coord.x*(8*R),nc=coord.y*C;
                 for(int k=0;k<args.ktiles;k++) {
                     auto packet=pipe.waitBuffer(0,shared.input);auto &tile=packet.template get<0>();
-                    if(lane<CF::SR*CF::SC) {
-                        int sr=lane/CF::SC,sc=lane%CF::SC,gr=nc/32+sr,gc=k*CF::SC+sc;
-                        tile.bs[sr][sc]=(gr<(args.n+31)/32 && gc<args.sc)?args.bs[size_t(gr)*args.sc+gc]:0;
-                    }
                     if(leader) {
                         auto &bar=packet.getBarrier();
-                        kt::tma::expect_bytes(bar,(8*R+C)*BK+8*R*4);
+                        kt::tma::expect_bytes(bar,(8*R+C)*BK);
                         kt::tma::load_async(tile.a[0],args.a,{0,0,mr,k*BK},bar);
                         kt::tma::load_async(tile.a[1],args.a,{0,0,mr+4*R,k*BK},bar);
                         kt::tma::load_async(tile.b,args.b,{0,0,nc,k*BK},bar);
-                        kt::tma::load_async(tile.as[0],args.as,{0,0,(k*CF::SC)/4,mr},bar);
-                        kt::tma::load_async(tile.as[1],args.as,{0,0,(k*CF::SC)/4,mr+4*R},bar);
                     }
                     last=packet.SlotIdx;packet.submitToNextAndTrigger();pipe.moveNext();
                 }
@@ -75,23 +82,30 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
         bool writer=warp==0 && kt::warp::elect_leader();
         for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
             kt::rt_fl<R,C> accum;kt::warp::rt_maps::zero(accum);
+            int2 coord=mx_raster(task,args.ntiles,args.mtiles,args.raster_group);
+            int mr=coord.x*8*R+group*4*R+warp*R,nc=coord.y*C;
+            typename CF::ScalePrefetch next;
+            next.load(args,mr,nc,0,lane);
             for(int k=0;k<args.ktiles;k++) {
                 auto packet=pipe.waitBuffer(2,shared.input);auto &tile=packet.template get<0>();
                 kt::rt_fp8e4m3<R,BK> ar;kt::rt_fp8e4m3<C,BK> br;
                 kt::mxfp8_scale<R,BK> as;kt::mxfp8_scale<C,BK> bs;
-                kt::warpgroup::load(ar,tile.a[group]);kt::warp::load<true>(br,tile.b);
+                load_fp8_factored<4,false>(ar,tile.a[group]);
+                load_fp8_factored<1,true>(br,tile.b);
 #pragma unroll
                 for(int i=0;i<R/16;i++) {
-                    int row=warp*R+i*16+lane/4+8*(lane&1);
-                    uint32_t word=std::bit_cast<uint32_t>(tile.as[group].data[row]);
+                    uint32_t word=next.a[i];
 #pragma unroll
                     for(int kk=0;kk<CF::SC;kk++)as.data[i][kk]=word >> (8*((k*CF::SC+kk)%4));
                 }
 #pragma unroll
                 for(int i=0;i<C/16;i++) {
 #pragma unroll
-                    for(int kk=0;kk<CF::SC;kk++)bs.data[i][kk]=tile.bs[i/2][kk];
+                    for(int kk=0;kk<CF::SC;kk++)
+                        bs.data[i][kk]=__shfl_sync(0xffffffff,next.b,(i/2)*CF::SC+kk);
                 }
+                // Issue next-stage scale loads before this stage's QMMA.
+                next.load(args,mr,nc,k+1,lane);
                 packet.submitToNextAndTrigger();pipe.moveNext();
                 kt::warp::wmma::mma_ABt_block_scaled(accum,ar,br,accum,as,bs);
             }
@@ -118,9 +132,10 @@ template<int R,int C,int BK,int S> struct MXPlan:MXPlanBase {
         args{MXGlobal<typename CF::ATile>((kt::fp8e4m3*)a,1,1,m,k),
              MXGlobal<typename CF::BTile>((kt::fp8e4m3*)b,1,1,n,k),
              MXGlobal<typename CF::OTile>((kt::bf16*)o,1,1,m,n),
-             MXLinearGlobal<typename CF::STile>((float*)as,1,1,(k+127)/128,((m+15)/16)*16),
+             (uint32_t*)as,
              (uint8_t*)bs,m,n,(k+31)/32,(n+C-1)/C,(m+8*R-1)/(8*R),
-             ((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,std::min(g,(m+8*R-1)/(8*R))} {
+             ((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,std::min(g,(m+8*R-1)/(8*R)),
+             uint32_t((m+15)/16*16)} {
         if(k%CF::ATile::swizzle_bytes || k%CF::BTile::swizzle_bytes || n%(CF::OTile::swizzle_bytes/2))
             throw std::runtime_error("K/N must align to TMA swizzle panels");
         int dev;mx_check(cudaGetDevice(&dev));cudaDeviceProp prop;mx_check(cudaGetDeviceProperties(&prop,dev));
@@ -143,9 +158,7 @@ extern "C" void *tk_mx_create(void *a,void *b,void *as,void *bs,void *o,int m,in
         if(!a||!b||!as||!bs||!o||m<=0||n<=0||k<=0||g<1)throw std::runtime_error("Invalid arguments");
 #define CFG(I,R,C,K,S) case I:return new MXPlan<R,C,K,S>(a,b,as,bs,o,m,n,k,sms,g)
         switch(config) {
-            CFG(0,16,32,32,2);CFG(1,16,64,32,2);CFG(2,16,128,32,2);CFG(3,32,32,32,2);
-            CFG(4,32,64,32,2);CFG(5,64,16,32,2);CFG(6,64,32,32,2);
-            CFG(7,16,64,64,2);CFG(8,16,128,64,2);CFG(9,32,32,64,2);
+#include "mxfp8_configs.inc"
             default:throw std::runtime_error("Invalid configuration");
         }
 #undef CFG

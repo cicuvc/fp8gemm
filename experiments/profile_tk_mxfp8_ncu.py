@@ -42,7 +42,8 @@ def main():
     torch.cuda.cudart().cudaProfilerStop()
     torch.testing.assert_close(plan.out, reference, rtol=0, atol=0)
     assert torch.isfinite(plan.out).all().item()
-    files = [Path(__file__), ROOT / "cuda/persistent_mxfp8_gemm.cu",
+    files = [Path(__file__), ROOT / "cuda/persistent_mxfp8_gemm.cu", ROOT / "cuda/mxfp8_configs.inc",
+             ROOT / "cuda/fp8_shared_load.cuh",
              ROOT / "cuda/tma_ring_pipe.cuh", ROOT / "cuda/linear_tma_buffer.cuh",
              ROOT / "experiments/tk_mxfp8_gemm.py", OUTPUT / "libgemm.so"]
     result = {

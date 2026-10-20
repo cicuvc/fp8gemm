@@ -1,8 +1,8 @@
-"""Prequantized GEMM scale layout, TMA tails, persistent reuse and graph safety."""
+"""Prequantized GEMM scale prefetch, TMA tails, persistent reuse and graph safety."""
 import pytest
 import torch
 import mxtest
-from experiments.tk_mxfp8_gemm import Library, build, OUTPUT, ROOT, pack_a_scales
+from experiments.tk_mxfp8_gemm import Library, build, OUTPUT, ROOT, pack_a_scales, CONFIGS
 from experiments.tk_persistent_gemm import GemmLibrary
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),reason='SM120 required')
@@ -10,13 +10,12 @@ pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_de
 def compiled():
     torch.set_num_threads(4)
     binary=OUTPUT/'libgemm.so'
-    sources=[ROOT/'cuda/persistent_mxfp8_gemm.cu',ROOT/'cuda/tma_ring_pipe.cuh',ROOT/'cuda/linear_tma_buffer.cuh',
+    sources=[ROOT/'cuda/persistent_mxfp8_gemm.cu',ROOT/'cuda/mxfp8_configs.inc',ROOT/'cuda/fp8_shared_load.cuh',
+             ROOT/'cuda/tma_ring_pipe.cuh',ROOT/'cuda/linear_tma_buffer.cuh',
              *(ROOT/'third_party/thunderkittens/include').rglob('*.cuh')]
     if not binary.exists() or any(p.stat().st_mtime>binary.stat().st_mtime for p in sources):build()
 
-@pytest.fixture(scope='module',params=[(1,192,64),(137,192,192),(260,192,192),(1031,320,320)])
-def operands(request):
-    m,n,k=request.param
+def exact_operands(m,n,k):
     i=torch.arange(m*k).reshape(m,k);j=torch.arange(n*k).reshape(n,k)
     a=((i*13%17-8).float()/4).to(torch.float8_e4m3fn)
     b=((j*7%17-8).float()/4).to(torch.float8_e4m3fn)
@@ -25,6 +24,20 @@ def operands(request):
     af=torch.ldexp(a.double(),(sa.T.int()-127).repeat_interleave(32,1))
     bf=torch.ldexp(b.double(),(sb.int()-127).repeat_interleave(32,0).repeat_interleave(32,1)[:n])
     return [a.cuda(),b.cuda(),pack_a_scales(sa.T.cuda()),sb.cuda()],(af@bf.T).bfloat16().cuda()
+
+@pytest.fixture(scope='module',params=[(1,192,64),(137,192,192),(260,192,192),(1031,320,320)])
+def operands(request):
+    return exact_operands(*request.param)
+
+@pytest.fixture(scope='module',params=[(13,192,128),(1031,320,1152)])
+def extended_operands(request):
+    return exact_operands(*request.param)
+
+@pytest.mark.parametrize('config',range(10,len(CONFIGS)))
+def test_extended_tiles_and_stages(extended_operands,config):
+    args,ref=extended_operands
+    p=Library().plan(*args,config=config,sms=3,raster_group=13)
+    torch.testing.assert_close(p(),ref,rtol=0,atol=0)
 
 @pytest.mark.parametrize('config',range(10))
 @pytest.mark.parametrize('group',[1,3,13])
@@ -39,7 +52,8 @@ def test_odd_k(config,k):
     a=torch.ones((777,k),device='cuda').to(torch.float8_e4m3fn)
     b=torch.ones((192,k),device='cuda').to(torch.float8_e4m3fn)
     sa=pack_a_scales(torch.full((777,k//32),127,device='cuda',dtype=torch.uint8))
-    sb=torch.full((6,k//32),127,device='cuda',dtype=torch.uint8)
+    # B scales are byte-addressable: no 2/4/16-byte alignment requirement.
+    sb=torch.full((6*(k//32)+1,),127,device='cuda',dtype=torch.uint8)[1:].reshape(6,k//32)
     p=Library().plan(a,b,sa,sb,config=config,sms=3,raster_group=3)
     torch.testing.assert_close(p(),torch.full((777,192),k,device='cuda',dtype=torch.bfloat16),rtol=0,atol=0)
 
@@ -58,7 +72,8 @@ def test_online_equivalence_and_reuse(config,m):
     saved=aq.clone();aq.zero_();graph.replay();assert torch.count_nonzero(p.out)==0
     aq.copy_(saved);graph.replay();torch.testing.assert_close(p.out,ref,rtol=0,atol=0)
     sa.sub_(0x01010101);graph.replay();torch.testing.assert_close(p.out,ref*.5,rtol=0,atol=0)
+    sb.sub_(1);graph.replay();torch.testing.assert_close(p.out,ref*.25,rtol=0,atol=0)
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):p()
     torch.cuda.current_stream().wait_stream(stream)
-    torch.testing.assert_close(p.out,ref*.5,rtol=0,atol=0)
+    torch.testing.assert_close(p.out,ref*.25,rtol=0,atol=0)
