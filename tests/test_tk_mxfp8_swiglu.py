@@ -113,7 +113,7 @@ def test_all_configurations_and_tails(m, n, k):
     gate_expected, up_expected = reference_accumulators(
         m, n, k, x, gate, up, raw_x_scale, gate_scale, up_scale
     )
-    gate_expected = gate_expected.float().bfloat16()
+    gate_expected = (0.5 * gate_expected).float().bfloat16()
     up_expected = up_expected.float().bfloat16()
     lib = MXFP8SwiGLULibrary()
     for config, (_, _, _, block_k, _) in enumerate(CONFIGS):

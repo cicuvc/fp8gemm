@@ -48,7 +48,7 @@ template<int R,int C,int BK,int S,bool Aux> struct Config {
     struct Args {
         Global<ATile> a;
         Global<BTile> gate,up;
-        Global<OTile> out,gate_linear,up_linear;
+        Global<OTile> out,gate_half,up_linear;
         const uint32_t *as; // [ceil(K/128),roundup(M,16)] packed E8M0 words
         const uint8_t *gs,*us; // [ceil(N/32),ceil(K/32)] E8M0 bytes
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
@@ -162,28 +162,18 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
             }
             kt::rt_bf<R,C> rounded;
             if constexpr(Aux) {
-                // Reconstruct the original gate projection exactly: the QMMA
-                // accumulated 0.5*g through the decremented E8M0 scale.
-                kt::rt_bf<R,C> gate_linear;
-#pragma unroll
-                for(int r=0;r<gate_acc.height;r++) {
-#pragma unroll
-                    for(int c=0;c<gate_acc.width;c++) {
-#pragma unroll
-                        for(int i=0;i<gate_acc.packed_per_tile;i++) {
-                            float2 g=gate_acc.tiles[r][c].data[i];
-                            gate_linear.tiles[r][c].data[i]=
-                                __floats2bfloat162_rn(2.f*g.x,2.f*g.y);
-                        }
-                    }
-                }
+                // Save the half-gate used by the activation directly. This
+                // avoids multiplying every gate value by two only to halve it
+                // again in backward.
+                kt::rt_bf<R,C> gate_half;
+                kt::warp::copy(gate_half,gate_acc);
                 if(writer)kt::tma::store_async_read_wait<0>();
                 kt::warpgroup::sync(group+1);
-                kt::warpgroup::store(shared.output[group][0],gate_linear);
+                kt::warpgroup::store(shared.output[group][0],gate_half);
                 asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
                 kt::warpgroup::sync(group+1);
                 if(writer) {
-                    kt::tma::store_async(args.gate_linear,shared.output[group][0],
+                    kt::tma::store_async(args.gate_half,shared.output[group][0],
                                         {0,0,coord.x*8*R+group*4*R,nc});
                     kt::tma::store_commit_group();
                 }

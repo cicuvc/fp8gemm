@@ -2,8 +2,8 @@
 
 ``x`` is E4M3 [M,K] with one E8M0 scale per row/K32. The gate and up weights
 use the usual 32x32 block-scale layout. The fused result is BF16 [M,N].
-Optionally, the raw pre-activation gate/up linear outputs are also written as
-BF16 through asynchronous TMA stores for the backward pass.
+Optionally, the pre-activation half-gate ``0.5*gate(x)`` and raw up linear
+output are also written as BF16 through asynchronous TMA stores for backward.
 """
 import ctypes as ct
 from pathlib import Path
@@ -156,7 +156,7 @@ class MXFP8SwiGLUPlan:
                 or tensor.device != x.device
                 or not tensor.is_contiguous()
             ):
-                raise ValueError("Invalid gate/up linear output buffer")
+                raise ValueError("Invalid gate-half/up-linear output buffer")
         inputs = [x, x_scale, gate, gate_scale, up, up_scale]
         outputs = [out, *aux_outputs]
         tensors = inputs + outputs

@@ -127,10 +127,10 @@ def benchmark_shape(m, n, k, rounds, repeats, include_bf16, store_aux):
     metadata = {}
     fused_outputs = {}
     fused_out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
-    gate_linear = (
+    gate_half = (
         torch.empty((m, n), device="cuda", dtype=torch.bfloat16) if store_aux else None
     )
-    up_linear = torch.empty_like(gate_linear) if store_aux else None
+    up_linear = torch.empty_like(gate_half) if store_aux else None
 
     for config, (_, _, _, block_k, _) in enumerate(CONFIGS):
         if k % block_k or n % 64:
@@ -145,7 +145,7 @@ def benchmark_shape(m, n, k, rounds, repeats, include_bf16, store_aux):
                 data["up_scale"],
                 config=config,
                 out=fused_out,
-                gate_out=gate_linear,
+                gate_out=gate_half,
                 up_out=up_linear,
                 raster_group=raster_group,
             )
