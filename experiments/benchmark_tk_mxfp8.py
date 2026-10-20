@@ -29,9 +29,9 @@ def quantize_a(x,q,s,M:tl.constexpr,K:tl.constexpr):
     mp:tl.constexpr=tl.cdiv(M,16)*16
     tl.store(s+tl.program_id(1)*mp+r,word,r<mp)
 
-def audit_sass():
-    raw=subprocess.check_output(['/usr/local/cuda/bin/cuobjdump','--dump-sass',str(OUTPUT/'libgemm.so')],text=True)
-    (OUTPUT/'kernels.sass').write_text(raw)
+def audit_sass(output=OUTPUT):
+    raw=subprocess.check_output(['/usr/local/cuda/bin/cuobjdump','--dump-sass',str(output/'libgemm.so')],text=True)
+    (output/'kernels.sass').write_text(raw)
     result={}
     for part in raw.split('Function : ')[1:]:
         name=part.splitlines()[0]

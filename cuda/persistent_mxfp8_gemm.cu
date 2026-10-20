@@ -5,14 +5,26 @@
 #include "mxfp8_epilogue.cuh"
 #include <stdexcept>
 #include <string>
+#ifndef FP8GEMM_FACTORED_STORES
+#define FP8GEMM_FACTORED_STORES 0
+#endif
 namespace fp8gemm {
+template<class ST,class RT>
+__device__ __forceinline__ void mx_store_output(ST &dst,const RT &src) {
+#if FP8GEMM_FACTORED_STORES
+    store_factored<4>(dst,src);
+#else
+    kt::warpgroup::store(dst,src);
+#endif
+}
 template<class T> using MXGlobal=kt::gl<typename T::dtype,-1,-1,-1,-1,T>;
 __device__ __forceinline__ int2 mx_raster(int task,int ntiles,int mtiles,int g) {
     if(g==1)return make_int2(task/ntiles,task%ntiles);
     int span=g*ntiles,first=task/span*g,rows=min(g,mtiles-first),local=task%span;
     return make_int2(first+local%rows,local/rows);
 }
-template<int R,int C,int BK,int S,bool SaveQ=false> struct MXConfig {
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false> struct MXConfig {
+    static_assert(!OnlyQ || SaveQ);
     using ATile=kt::st_fp8e4m3<4*R,BK>;
     using BTile=kt::st_fp8e4m3<C,BK>;
     using OTile=kt::st_bf<4*R,C>;
@@ -26,10 +38,11 @@ template<int R,int C,int BK,int S,bool SaveQ=false> struct MXConfig {
     };
     struct Shared {
         Packet input[S];
-        std::conditional_t<SaveQ,OutputStorage,OTile> output[2];
+        std::conditional_t<OnlyQ,QTile,std::conditional_t<SaveQ,OutputStorage,OTile>> output[2];
     };
     struct Args {
-        MXGlobal<ATile> a;MXGlobal<BTile> b;MXGlobal<OTile> out;
+        MXGlobal<ATile> a;MXGlobal<BTile> b;
+        [[no_unique_address]] std::conditional_t<OnlyQ,NoQuantizedArgs,MXGlobal<OTile>> out;
         const uint32_t *as; // packed [ceil(K/128),roundup(M,16)] uint32 words
         const uint8_t *bs; // bs[ceil(N/32),K/32]
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
@@ -55,10 +68,10 @@ template<int R,int C,int BK,int S,bool SaveQ=false> struct MXConfig {
         }
     };
 };
-template<int R,int C,int BK,int S,bool SaveQ=false>
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
-    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ>::Args args) {
-    using CF=MXConfig<R,C,BK,S,SaveQ>;using Shared=typename CF::Shared;
+    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ,OnlyQ>::Args args) {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ>;using Shared=typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid(),lane=threadIdx.x%32;
@@ -121,37 +134,58 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
             if constexpr(SaveQ) {
                 kt::rt_bf<R,C> rounded;
                 kt::warp::copy(rounded,accum);
-                if(writer)kt::tma::store_async_read_wait<0>();
-                kt::warpgroup::sync(group+1);
-                kt::warpgroup::store(shared.output[group].bf,rounded);
-                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-                kt::warpgroup::sync(group+1);
-                if(writer) {
-                    kt::tma::store_async(args.out,shared.output[group].bf,
-                                        {0,0,coord.x*8*R+group*4*R,nc});
-                    kt::tma::store_commit_group();
+                if constexpr(!OnlyQ) {
+                    if(writer)kt::tma::store_async_read_wait<0>();
+                    kt::warpgroup::sync(group+1);
+                    mx_store_output(shared.output[group].bf,rounded);
+                    asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                    kt::warpgroup::sync(group+1);
+                    if(writer) {
+                        kt::tma::store_async(args.out,shared.output[group].bf,
+                                            {0,0,coord.x*8*R+group*4*R,nc});
+                        kt::tma::store_commit_group();
+                    }
                 }
+                // Without the BF16-store barrier, establish warp convergence
+                // before quantization's shuffle reductions.
+                if constexpr(OnlyQ)__syncwarp();
                 // Quantization can overlap TMA reading the BF16 output.
+#ifdef FP8GEMM_EPILOGUE_MOVM
+                MXOutputTransposed<R,C> quantized;
+#else
                 kt::rt_fp8e4m3<R,C> quantized;
+#endif
                 kt::mxfp8_scale<R,C> scales;
+#ifdef FP8GEMM_EPILOGUE_MOVM
+                quantize_output_movmatrix(quantized,scales,rounded);
+#else
                 kt::online_quantize_mxfp8(quantized,scales,rounded);
+#endif
                 store_output_scales<R,C>(args.q.scales,scales,mr,nc,args.m,args.n);
-                // Reuse exactly the BF16 shared allocation. Only the issuing
-                // warp waits for TMA, then releases every writer via the barrier.
+                // Wait for the preceding output TMA read before reusing shared
+                // storage: BF16 in dual-output mode, previous task in FP8-only mode.
                 if(writer)kt::tma::store_async_read_wait<0>();
                 kt::warpgroup::sync(group+1);
-                kt::warpgroup::store(shared.output[group].q,quantized);
+                auto &qshared=[&]() -> typename CF::QTile& {
+                    if constexpr(OnlyQ)return shared.output[group];
+                    else return shared.output[group].q;
+                }();
+#ifdef FP8GEMM_EPILOGUE_MOVM
+                store_output_movmatrix<4,(FP8GEMM_FACTORED_STORES!=0)>(qshared,quantized);
+#else
+                mx_store_output(qshared,quantized);
+#endif
                 asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
                 kt::warpgroup::sync(group+1);
                 if(writer) {
-                    kt::tma::store_async(args.q.out,shared.output[group].q,
+                    kt::tma::store_async(args.q.out,qshared,
                                         {0,0,coord.x*8*R+group*4*R,nc});
                     kt::tma::store_commit_group();
                 }
             } else {
                 if(writer)kt::tma::store_async_read_wait<0>();
                 kt::warpgroup::sync(group+1);
-                kt::warpgroup::store(shared.output[group],accum);
+                mx_store_output(shared.output[group],accum);
                 asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
                 kt::warpgroup::sync(group+1);
                 if(writer) {
@@ -167,8 +201,12 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
 }
 static void mx_check(cudaError_t e){if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));}
 struct MXPlanBase {virtual ~MXPlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
-template<int R,int C,int BK,int S,bool SaveQ=false> struct MXPlan:MXPlanBase {
-    using CF=MXConfig<R,C,BK,S,SaveQ>;typename CF::Args args;int grid,regs;
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false> struct MXPlan:MXPlanBase {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ>;typename CF::Args args;int grid,regs;
+    static auto bf16_args(void *o,int m,int n) {
+        if constexpr(OnlyQ)return typename CF::NoQuantizedArgs{};
+        else return MXGlobal<typename CF::OTile>((kt::bf16*)o,1,1,m,n);
+    }
     static auto quantized_args(void *q,void *qs,int m,int n) {
         if constexpr(SaveQ) {
             static_assert(C%32==0);
@@ -185,21 +223,21 @@ template<int R,int C,int BK,int S,bool SaveQ=false> struct MXPlan:MXPlanBase {
            void *q=nullptr,void *qs=nullptr):
         args{MXGlobal<typename CF::ATile>((kt::fp8e4m3*)a,1,1,m,k),
              MXGlobal<typename CF::BTile>((kt::fp8e4m3*)b,1,1,n,k),
-             MXGlobal<typename CF::OTile>((kt::bf16*)o,1,1,m,n),
+             bf16_args(o,m,n),
              (uint32_t*)as,
              (uint8_t*)bs,m,n,(k+31)/32,(n+C-1)/C,(m+8*R-1)/(8*R),
              ((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,std::min(g,(m+8*R-1)/(8*R)),
              uint32_t((m+15)/16*16),quantized_args(q,qs,m,n)} {
-        if(k%CF::ATile::swizzle_bytes || k%CF::BTile::swizzle_bytes || n%(CF::OTile::swizzle_bytes/2))
+        if(k%CF::ATile::swizzle_bytes || k%CF::BTile::swizzle_bytes || (!OnlyQ && n%(CF::OTile::swizzle_bytes/2)))
             throw std::runtime_error("K/N must align to TMA swizzle panels");
         int dev;mx_check(cudaGetDevice(&dev));cudaDeviceProp prop;mx_check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ>));regs=attr.numRegs;
+        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ>));regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)throw std::runtime_error("Unexpected register pool or local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_mxfp8<R,C,BK,S,SaveQ><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
+        persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
 };
@@ -225,10 +263,12 @@ extern "C" void *tk_mx_create_quantized(void *a,void *b,void *as,void *bs,void *
     void *q,void *qs,int m,int n,int k,int config,int sms,int g) {
     using namespace fp8gemm;
     try {
-        if(!a||!b||!as||!bs||!o||!q||!qs||m<=0||n<=0||k<=0||g<1)
+        if(!a||!b||!as||!bs||!q||!qs||m<=0||n<=0||k<=0||g<1)
             throw std::runtime_error("Invalid arguments");
 #define CFG(I,R,C,K,S) case I: \
-        if constexpr(C%32==0) return new MXPlan<R,C,K,S,true>(a,b,as,bs,o,m,n,k,sms,g,q,qs); \
+        if constexpr(C%32==0) { \
+            if(o)return new MXPlan<R,C,K,S,true>(a,b,as,bs,o,m,n,k,sms,g,q,qs); \
+            return new MXPlan<R,C,K,S,true,true>(a,b,as,bs,o,m,n,k,sms,g,q,qs); } \
         else throw std::runtime_error("Quantized epilogue requires C divisible by 32")
         switch(config) {
 #include "mxfp8_configs.inc"

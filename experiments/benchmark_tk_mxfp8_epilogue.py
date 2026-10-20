@@ -32,7 +32,7 @@ def main():
     q_audit={}
     for part in raw.split('Function : ')[1:]:
         name=part.splitlines()[0]
-        if 'Lb1E' not in name:continue
+        if 'Lb1E' not in name or 'Lb1ELb1E' in name:continue
         ops=Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)',part))
         assert not any(o.startswith(('LDL','STL','CALL')) for o in ops),name
         assert any(o.startswith('STG') for o in ops),name
