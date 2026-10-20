@@ -1,0 +1,81 @@
+{
+  "report": "runs/tk_mxfp8_ncu/forward_m4096_n4096_k4096_c8_g1.ncu-rep",
+  "report_bytes": 5941043,
+  "report_sha256": "9955ed2aad187272d888b493a5742b316361f7f8b3a51f2932b7c68081aaee5d",
+  "ncu_version": "2025.4.1.0 (build 37053803)",
+  "driver_version": "615.71.09",
+  "ncu_options": [
+    "--profile-from-start",
+    "off",
+    "--set",
+    "full",
+    "--clock-control",
+    "none",
+    "--cache-control",
+    "none",
+    "--import-source",
+    "yes",
+    "--source-folders",
+    "/home/cicuvc/cs/project/fp8gemm",
+    "--kernel-name",
+    "regex:persistent_mxfp8",
+    "--launch-count",
+    "1"
+  ],
+  "replay_passes": 40,
+  "binary_matches_prior_benchmark": true,
+  "kernel_source_matches_prior_benchmark": true,
+  "import_details_and_source_succeeded": true,
+  "profile": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "torch": "2.13.0+cu130",
+    "base_commit": "5e482d13d016d5d9f2925ca77aa60299a5de8486",
+    "shape_mnk": [
+      4096,
+      4096,
+      4096
+    ],
+    "config": 8,
+    "plan": {
+      "R": 16,
+      "C": 128,
+      "BK": 64,
+      "stages": 2,
+      "shared_bytes": 68608,
+      "initial_regs": 168,
+      "grid": 170,
+      "raster_group": 1
+    },
+    "unprofiled_graph_timing": {
+      "pure": {
+        "median_us": 266.34201407432556,
+        "min_us": 262.53899931907654,
+        "max_us": 268.10649037361145,
+        "round_us": [
+          262.53899931907654,
+          262.87150382995605,
+          266.34201407432556,
+          268.10649037361145,
+          267.88750290870667
+        ],
+        "paired_speedup": 1.0
+      }
+    },
+    "profile_region": "One pure MXFP8 forward GEMM; all quantization, warmup and graph timing precede cudaProfilerStart.",
+    "output_bitwise_equal_after_profile": true,
+    "sha256": {
+      "experiments/profile_tk_mxfp8_ncu.py": "1c75e6e397579d0f0c547824c86761e535baf879d8f536a60d37d681973566eb",
+      "cuda/persistent_mxfp8_gemm.cu": "2f0b9d6a0a5e1b3c66962787c084ee53ef791108985d56a9148f7d608e2f6279",
+      "cuda/tma_ring_pipe.cuh": "1945db1bc8fd1b7cb78162e931ff603fe7e1780245a444ef433925e7f81436d1",
+      "cuda/linear_tma_buffer.cuh": "a2db09b9b2ae982c09cd2fe0f0c6c58a5fe6db7f7ae98d90d2c2da38afa09e12",
+      "experiments/tk_mxfp8_gemm.py": "52c8b16e2cc74e5b6f6b567592fd32c4cdd05647cc4b9d57de675eee0c4cfe6f",
+      "runs/tk_mxfp8_gemm/libgemm.so": "f29cb8c9d83c4560486e681a009bdefe8bfa8c843abd2d01a072da7f52e490f1"
+    }
+  },
+  "ncu_summary": {
+    "duration_us": 245.06,
+    "sm_frequency_ghz": 2.34,
+    "l2_throughput_percent": 70.18,
+    "compute_throughput_percent": 68.98
+  }
+}

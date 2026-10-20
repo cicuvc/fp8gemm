@@ -1,0 +1,124 @@
+{
+  "iterations": 4096,
+  "warps": 4,
+  "independent_accumulators_per_warp": 8,
+  "rounds": [
+    {
+      "round": 0,
+      "mode": "plain",
+      "cycles_per_mma_per_warp": [
+        16.218964,
+        16.219025,
+        16.219086,
+        16.219147
+      ]
+    },
+    {
+      "round": 0,
+      "mode": "block_scale",
+      "cycles_per_mma_per_warp": [
+        16.223236,
+        16.223297,
+        16.223358,
+        16.223419
+      ]
+    },
+    {
+      "round": 1,
+      "mode": "plain",
+      "cycles_per_mma_per_warp": [
+        16.216339,
+        16.2164,
+        16.216461,
+        16.216522
+      ]
+    },
+    {
+      "round": 1,
+      "mode": "block_scale",
+      "cycles_per_mma_per_warp": [
+        16.217407,
+        16.217468,
+        16.217529,
+        16.21759
+      ]
+    },
+    {
+      "round": 2,
+      "mode": "plain",
+      "cycles_per_mma_per_warp": [
+        16.20993,
+        16.209991,
+        16.210052,
+        16.210114
+      ]
+    },
+    {
+      "round": 2,
+      "mode": "block_scale",
+      "cycles_per_mma_per_warp": [
+        16.219635,
+        16.219696,
+        16.219757,
+        16.219818
+      ]
+    },
+    {
+      "round": 3,
+      "mode": "plain",
+      "cycles_per_mma_per_warp": [
+        16.220795,
+        16.220856,
+        16.220917,
+        16.220978
+      ]
+    },
+    {
+      "round": 3,
+      "mode": "block_scale",
+      "cycles_per_mma_per_warp": [
+        16.222595,
+        16.222656,
+        16.222717,
+        16.222778
+      ]
+    },
+    {
+      "round": 4,
+      "mode": "plain",
+      "cycles_per_mma_per_warp": [
+        16.208405,
+        16.208466,
+        16.208527,
+        16.208588
+      ]
+    },
+    {
+      "round": 4,
+      "mode": "block_scale",
+      "cycles_per_mma_per_warp": [
+        16.216278,
+        16.216339,
+        16.2164,
+        16.216461
+      ]
+    }
+  ],
+  "nvidia_smi": "Tue Oct 20 12:23:42 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 610.57.04              KMD Version: 610.57.04     CUDA UMD Version: 13.3     |\n+-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA RTX PRO 6000 Blac...    On  |   00000000:81:00.0 Off |                    0 |\n| N/A   36C    P0             57W /  600W |       6MiB /  97887MiB |      0%      Default |\n|                                         |                        |             Disabled |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n",
+  "command": [
+    "/usr/local/cuda/bin/nvcc",
+    "-std=c++20",
+    "-gencode=arch=compute_120a,code=sm_120a",
+    "-O3",
+    "-lineinfo",
+    "/workspace/cuda/probe_mxfp8_rate.cu",
+    "-o",
+    "/tmp/mma_rate"
+  ],
+  "source_sha256": "f0332f34785f67a55163bd34e35db6c2f71945afecad71232b846d70325620a3",
+  "method": "One CTA of four warps, eight independent accumulator fragments per warp, 4096 loop iterations. SM clock64 elapsed / (4096*8) gives effective per-warp MMA issue interval under this load, not instruction latency. Exact FP32 output checked in both modes.",
+  "median_cycles_per_mma_per_warp": {
+    "plain": 16.2164305,
+    "block_scale": 16.2197265
+  }
+}

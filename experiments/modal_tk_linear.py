@@ -4,6 +4,7 @@ python -m modal run experiments/modal_tk_linear.py
 python -m modal run experiments/modal_tk_linear.py --tune-dw --rounds 5 --repeats 16
 python -m modal run experiments/modal_tk_linear.py --forward-pipeline --rounds 5 --repeats 16
 python -m modal run experiments/modal_tk_linear.py --cublas
+python -m modal run experiments/modal_tk_linear.py --mxfp8
 """
 import hashlib
 import json
@@ -23,6 +24,9 @@ SOURCES = [
     "experiments/benchmark_tk_forward_pipeline.py",
     "experiments/benchmark_cublaslt.py", "experiments/cublaslt_gemm.py",
     "cuda/cublaslt_benchmark.cu",
+    "cuda/persistent_mxfp8_gemm.cu", "experiments/tk_mxfp8_gemm.py",
+    "experiments/benchmark_tk_mxfp8.py", "tests/test_tk_mxfp8_gemm.py",
+    "cuda/linear_tma_buffer.cuh",
     "tests/test_tk_forward_pipeline.py",
     "tests/test_tk_linear_backward.py", "tests/test_tk_group_raster.py",
     "cuda/persistent_fp8_gemm.cu", "cuda/persistent_dual_online_gemm.cu",
@@ -49,7 +53,7 @@ cache = modal.Volume.from_name("fp8-swiglu-triton-cache", create_if_missing=True
 @app.function(image=image, gpu="RTX-PRO-6000", cpu=8, memory=32768,
               timeout=3600, volumes={"/cache": cache})
 def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None, backward_sweep=False,
-            forward_pipeline=False, baseline_sources=None, cublas=False):
+            forward_pipeline=False, baseline_sources=None, cublas=False, mxfp8=False):
     import os
     import sys
     from datetime import datetime, timezone
@@ -104,6 +108,9 @@ def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None,
     if cublas:
         run("cublas_build", [sys.executable, "-c",
                             "from experiments.cublaslt_gemm import build; build()"])
+    if mxfp8:
+        run("mxfp8_build", [sys.executable, "-c",
+                           "from experiments.tk_mxfp8_gemm import build; build()"])
     if forward_pipeline:
         from experiments.tk_persistent_gemm import FLAGS
         baseline_dir = Path("runs/tk_forward_pipeline/old")
@@ -114,7 +121,7 @@ def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None,
                                "-shared", "-Xcompiler=-fPIC",
                                str(baseline_dir / "persistent_fp8_gemm.cu"), "-lcuda",
                                "-o", str(baseline_dir / "libgemm.so")])
-    for name in ["tk_persistent_gemm", "tk_dual_online_gemm", "tk_linear_backward"]:
+    for name in ["tk_persistent_gemm", "tk_dual_online_gemm", "tk_linear_backward", "tk_mxfp8_gemm"]:
         path = Path("runs") / name / "build.log"
         if path.exists():
             logs[name + "_build"] = path.read_text()
@@ -122,17 +129,20 @@ def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None,
     test_files = ["tests/test_tk_linear_backward.py", "tests/test_tk_group_raster.py"]
     if forward_pipeline:
         test_files.append("tests/test_tk_forward_pipeline.py")
+    if mxfp8:
+        test_files.append("tests/test_tk_mxfp8_gemm.py")
     run("tests", [sys.executable, "-m", "pytest", "-q", *test_files])
-    if not tune_dw and not forward_pipeline and not cublas:
+    if not tune_dw and not forward_pipeline and not cublas and not mxfp8:
         run("forward_validation", [sys.executable, "experiments/benchmark_tk_persistent_gemm.py",
                                   "--skip-build", "--validate-only"])
-    script = ("benchmark_cublaslt.py" if cublas else
+    script = ("benchmark_tk_mxfp8.py" if mxfp8 else
+              "benchmark_cublaslt.py" if cublas else
               "benchmark_tk_forward_pipeline.py" if forward_pipeline else
               "benchmark_tk_dw_tuning.py" if tune_dw else "benchmark_tk_linear_training.py")
     command = [sys.executable, "experiments/" + script,
                "--rounds", str(rounds), "--repeats", str(repeats),
                "--output", str(outdir / "benchmark.json")]
-    if forward_pipeline:
+    if forward_pipeline or mxfp8:
         command += ["--peak-tflops", "877.9", "1007.6"]
     if tune_dw or forward_pipeline:
         if backward_sweep:
@@ -148,7 +158,7 @@ def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None,
     result["validation"] = {
         "tests": logs["tests"],
     }
-    if not tune_dw and not forward_pipeline and not cublas:
+    if not tune_dw and not forward_pipeline and not cublas and not mxfp8:
         result["validation"]["forward"] = json.loads(
             Path("runs/tk_persistent_gemm/validation.json").read_text())
     (outdir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -159,8 +169,9 @@ def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None,
 @app.local_entrypoint()
 def main(rounds: int = 9, repeats: int = 64,
          output: str = "", tune_dw: bool = False, groups: str = "", configs: str = "",
-         backward_sweep: bool = False, forward_pipeline: bool = False, cublas: bool = False):
-    if sum([tune_dw, forward_pipeline, cublas]) > 1:
+         backward_sweep: bool = False, forward_pipeline: bool = False, cublas: bool = False,
+         mxfp8: bool = False):
+    if sum([tune_dw, forward_pipeline, cublas, mxfp8]) > 1:
         raise ValueError("Choose one benchmark mode")
     if backward_sweep and not tune_dw:
         raise ValueError("--backward-sweep requires --tune-dw")
@@ -186,8 +197,9 @@ def main(rounds: int = 9, repeats: int = 64,
     result, logs = measure.remote(manifest, rounds, repeats, tune_dw,
                                  [int(x) for x in groups.split(",")] if groups else None,
                                  [int(x) for x in configs.split(",")] if configs else None,
-                                 backward_sweep, forward_pipeline, baseline_sources, cublas)
-    path = Path(output or ("benchmarks/cublaslt_rtx_pro_6000.json" if cublas else
+                                 backward_sweep, forward_pipeline, baseline_sources, cublas, mxfp8)
+    path = Path(output or ("benchmarks/tk_mxfp8_rtx_pro_6000.json" if mxfp8 else
+                           "benchmarks/cublaslt_rtx_pro_6000.json" if cublas else
                            "benchmarks/tk_forward_pipeline_rtx_pro_6000.json" if forward_pipeline else
                            "benchmarks/tk_dw_tuning_rtx_pro_6000.json" if tune_dw else
                            "benchmarks/tk_linear_training_rtx_pro_6000.json"))
