@@ -1,0 +1,218 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "accuracy": [
+    {
+      "half_gate_std": 0.1,
+      "dgate": {
+        "relative_l2": 0.004270539153367281,
+        "max_abs": 0.005859375,
+        "cosine": 0.9999908208847046
+      },
+      "dgate_negative_relative_l2": 0.0036864220164716244,
+      "dgate_positive_relative_l2": 0.004552353639155626,
+      "dup": {
+        "relative_l2": 0.0028914003632962704,
+        "max_abs": 0.0078125,
+        "cosine": 0.9999959468841553
+      }
+    },
+    {
+      "half_gate_std": 1.0,
+      "dgate": {
+        "relative_l2": 0.004182230215519667,
+        "max_abs": 0.09375,
+        "cosine": 0.9999914765357971
+      },
+      "dgate_negative_relative_l2": 0.0080867363139987,
+      "dgate_positive_relative_l2": 0.003934807144105434,
+      "dup": {
+        "relative_l2": 0.003330287989228964,
+        "max_abs": 0.125,
+        "cosine": 0.9999948740005493
+      }
+    },
+    {
+      "half_gate_std": 2.0,
+      "dgate": {
+        "relative_l2": 0.007700392976403236,
+        "max_abs": 0.375,
+        "cosine": 0.9999740123748779
+      },
+      "dgate_negative_relative_l2": 0.03215401992201805,
+      "dgate_positive_relative_l2": 0.006248293910175562,
+      "dup": {
+        "relative_l2": 0.0028956313617527485,
+        "max_abs": 0.125,
+        "cosine": 0.9999959468841553
+      }
+    },
+    {
+      "half_gate_std": 4.0,
+      "dgate": {
+        "relative_l2": 0.016301998868584633,
+        "max_abs": 1.25,
+        "cosine": 0.9998980760574341
+      },
+      "dgate_negative_relative_l2": 0.10464433580636978,
+      "dgate_positive_relative_l2": 0.01232676301151514,
+      "dup": {
+        "relative_l2": 0.001999102532863617,
+        "max_abs": 0.25,
+        "cosine": 0.9999979734420776
+      }
+    },
+    {
+      "half_gate_std": 8.0,
+      "dgate": {
+        "relative_l2": 0.01781231351196766,
+        "max_abs": 2.5,
+        "cosine": 0.9998749494552612
+      },
+      "dgate_negative_relative_l2": 0.16299723088741302,
+      "dgate_positive_relative_l2": 0.013301681727170944,
+      "dup": {
+        "relative_l2": 0.0009730667225085199,
+        "max_abs": 0.25,
+        "cosine": 0.9999994039535522
+      }
+    }
+  ],
+  "performance": [
+    {
+      "elements": 1048576,
+      "median_us": 2.351999981328845,
+      "min_us": 2.311999909579754,
+      "max_us": 2.749999985098839,
+      "round_us": [
+        2.749999985098839,
+        2.3835001047700644,
+        2.351999981328845,
+        2.324499888345599,
+        2.351999981328845,
+        2.311999909579754,
+        2.320999978110194
+      ],
+      "bytes": 10485760,
+      "effective_gbps": 4458.231327908303,
+      "grid": 512,
+      "threads": 256
+    },
+    {
+      "elements": 8388608,
+      "median_us": 12.570000253617764,
+      "min_us": 12.555000372231007,
+      "max_us": 12.904499657452106,
+      "round_us": [
+        12.904499657452106,
+        12.569000013172626,
+        12.565500102937222,
+        12.570000253617764,
+        12.60400004684925,
+        12.592500075697899,
+        12.555000372231007
+      ],
+      "bytes": 83886080,
+      "effective_gbps": 6673.5145829338235,
+      "grid": 1360,
+      "threads": 256
+    },
+    {
+      "elements": 33554432,
+      "median_us": 218.58300268650055,
+      "min_us": 218.3154970407486,
+      "max_us": 218.79200637340546,
+      "round_us": [
+        218.7650054693222,
+        218.42199563980103,
+        218.3610051870346,
+        218.79200637340546,
+        218.6100035905838,
+        218.3154970407486,
+        218.58300268650055
+      ],
+      "bytes": 335544320,
+      "effective_gbps": 1535.088803227987,
+      "grid": 1360,
+      "threads": 256
+    },
+    {
+      "elements": 67108864,
+      "median_us": 438.073992729187,
+      "min_us": 437.7189874649048,
+      "max_us": 438.5020136833191,
+      "round_us": [
+        438.5020136833191,
+        437.7189874649048,
+        438.073992729187,
+        438.0300045013428,
+        438.1270110607147,
+        438.16548585891724,
+        437.8244876861572
+      ],
+      "bytes": 671088640,
+      "effective_gbps": 1531.9070548313978,
+      "grid": 1360,
+      "threads": 256
+    }
+  ],
+  "sass": {
+    "LDC": 2,
+    "S2R": 1,
+    "S2UR": 1,
+    "LDCU.64": 6,
+    "HFMA2": 6,
+    "BSSY.RECONVERGENT": 3,
+    "LDCU": 1,
+    "LDCU.128": 7,
+    "IMAD": 12,
+    "IMAD.WIDE.U32": 7,
+    "ISETP.GE.S64.AND": 2,
+    "BRA": 8,
+    "IADD.64": 46,
+    "ISETP.GE.U64.AND": 4,
+    "IMNMX.U64": 1,
+    "SEL.64": 2,
+    "LOP3.LUT": 4,
+    "ISETP.NE.U32.AND": 2,
+    "I2F.U32.RP": 1,
+    "IADD": 14,
+    "MUFU.RCP": 2,
+    "F2I.FTZ.U32.TRUNC.NTZ": 1,
+    "MOV": 14,
+    "IMAD.HI.U32": 11,
+    "ISETP.GE.U32.AND": 2,
+    "CALL.REL.NOINC": 1,
+    "BSYNC.RECONVERGENT": 3,
+    "ISETP.NE.S64.AND": 3,
+    "SHF.L.U64.HI": 5,
+    "SHF.L.U32": 5,
+    "IADD.X": 7,
+    "LDG.E.128.CONSTANT": 15,
+    "MUFU.TANH.BF16": 41,
+    "PRMT": 26,
+    "HADD2": 3,
+    "HFMA2.BF16_V2": 113,
+    "HMUL2.BF16_V2": 32,
+    "STG.E.128": 10,
+    "USHF.L.U64.HI": 1,
+    "USHF.L.U32": 1,
+    "UIADD3.64": 1,
+    "ISETP.LT.S64.AND": 1,
+    "ISETP.NE.OR": 1,
+    "EXIT": 2,
+    "LDG.E.U16.CONSTANT": 3,
+    "STG.E.U16": 2,
+    "I2F.U64.RP": 1,
+    "NOP": 15,
+    "F2I.U64.TRUNC": 1,
+    "IADD3.X": 2,
+    "RET.REL.NODEC": 1
+  },
+  "method": "Accuracy compares BF16 outputs with an FP64 formula cast to BF16. Performance uses CUDA graphs, 64 launches per graph, and 7 rounds. Effective bandwidth counts three BF16 reads and two BF16 writes.",
+  "source_sha256": {
+    "cuda/silu_bwd_elementwise.cu": "d243f4d15b3a5b7922ccb340d78e54c5b31c133b24aaf99fa1983ce4b7a922d1",
+    "experiments/tk_silu_bwd.py": "017c5061b07bbebfc56d953daf1663006eb65b4cd3571e597a86ae9a3f21196a",
+    "experiments/benchmark_silu_bwd.py": "1a8d84c0a2cf9824d1d7401b2fb6caf0ff5e431f07791f1762d3eab26fcf2bd8"
+  }
+}
