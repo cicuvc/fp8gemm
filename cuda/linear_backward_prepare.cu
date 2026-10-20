@@ -5,7 +5,7 @@
 
 // A padded copy for dX and a transposed copy for dW share one global read.
 // Bias partials sum the BF16 gradient, matching FP8Linear's existing contract.
-template<bool Bias>
+template<bool Bias,bool Transpose=true>
 __global__ void prepare_dy(const __nv_bfloat16* src, __nv_bfloat16* dy,
                           __nv_bfloat16* dyt, float* partial,
                           int m,int n,int mp,int np,int64_t s0,int64_t s1) {
@@ -16,13 +16,15 @@ __global__ void prepare_dy(const __nv_bfloat16* src, __nv_bfloat16* dy,
     for(int j=0;j<32;j+=8) {
         int r=r0+ty+j,c=c0+tx;
         auto v=(r<m && c<n)?src[int64_t(r)*s0+int64_t(c)*s1]:__float2bfloat16(0.f);
-        tile[ty+j][tx]=v;
+        if constexpr(Bias || Transpose) tile[ty+j][tx]=v;
         if(r<m)dy[int64_t(r)*np+c]=v;
     }
-    __syncthreads();
+    if constexpr(Bias || Transpose) __syncthreads();
+    if constexpr(Transpose) {
 #pragma unroll
-    for(int j=0;j<32;j+=8)
-        dyt[int64_t(c0+ty+j)*mp+r0+tx]=tile[tx][ty+j];
+        for(int j=0;j<32;j+=8)
+            dyt[int64_t(c0+ty+j)*mp+r0+tx]=tile[tx][ty+j];
+    }
     if constexpr(Bias) {
         if(ty==0) {
             float sum=0;
@@ -86,7 +88,12 @@ extern "C" int linear_prepare_dy(void* src,void* dy,void* dyt,void* partial,
     int m,int n,int mp,int np,int64_t s0,int64_t s1,int bias,void* stream) {
     dim3 grid(np/32,mp/32),block(32,8);
     auto s=static_cast<cudaStream_t>(stream);
-    if(bias)prepare_dy<true><<<grid,block,0,s>>>(static_cast<__nv_bfloat16*>(src),
+    if(!dyt) {
+        if(bias)prepare_dy<true,false><<<grid,block,0,s>>>(static_cast<__nv_bfloat16*>(src),
+            static_cast<__nv_bfloat16*>(dy),nullptr,static_cast<float*>(partial),m,n,mp,np,s0,s1);
+        else prepare_dy<false,false><<<grid,block,0,s>>>(static_cast<__nv_bfloat16*>(src),
+            static_cast<__nv_bfloat16*>(dy),nullptr,nullptr,m,n,mp,np,s0,s1);
+    } else if(bias)prepare_dy<true><<<grid,block,0,s>>>(static_cast<__nv_bfloat16*>(src),
         static_cast<__nv_bfloat16*>(dy),static_cast<__nv_bfloat16*>(dyt),static_cast<float*>(partial),m,n,mp,np,s0,s1);
     else prepare_dy<false><<<grid,block,0,s>>>(static_cast<__nv_bfloat16*>(src),
         static_cast<__nv_bfloat16*>(dy),static_cast<__nv_bfloat16*>(dyt),nullptr,m,n,mp,np,s0,s1);

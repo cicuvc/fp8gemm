@@ -1,0 +1,1338 @@
+{
+  "date": "2026-10-20",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "driver": "615.71.09",
+  "ncu": "2025.4.1.0",
+  "profiled_kernel": "fp8gemm::dual_online::dual_online_gemm<16,128,64,2,false,true,true,false>",
+  "measurement": {
+    "scope": "dW GEMM only: dY preparation and X transpose/quantization excluded",
+    "shape_order": "M=batch/reduction, N=output features, K=input features; dW[N,K]=dY[M,N]^T X[M,K]",
+    "main_profile": "--set full --profile-from-start off --clock-control none --cache-control none --import-source yes; kernel replay, 40 passes",
+    "timing": "Separate process without NCU, warm CUDA graphs, five rounds x 64 replays, median; unlocked clocks. NCU duration is recorded separately.",
+    "nominal_fp8a32_peak_tflops": 419,
+    "controls": "Large case also collected with --clock-control base, both full set and one-pass tensor-only counters.",
+    "stall_percent": "Normalized sum of NCU average_warps_issue_stalled_* ratios; distribution of active-warp cycles, NOT fractions of kernel wall time.",
+    "validation": "Every profiled output was finite and bitwise equal to the pre-profile launch. Kernel implementation unchanged in this profiling task."
+  },
+  "cases": [
+    {
+      "name": "medium",
+      "shape_mnk": [
+        1024,
+        8192,
+        1024
+      ],
+      "plan": {
+        "R": 16,
+        "C": 128,
+        "BK": 64,
+        "stages": 2,
+        "shared_bytes": 82944,
+        "initial_regs": 168,
+        "grid": 170,
+        "online_b": 0,
+        "fp32_output": 1,
+        "native_dy": true,
+        "swap_ab": false
+      },
+      "sha256": {
+        "experiments/profile_tk_dw_ncu.py": "e7105752c0036733a36e6cf0a2c674e976c4a3c33a87bd3475d836ce6c1788e6",
+        "cuda/persistent_dual_online_gemm.cu": "d5d1b36c9d6c5d00d605d9ff5359331a2f48f1a70a80f265bd45f0a5612b5ebf",
+        "experiments/tk_linear_backward.py": "546d3c2d0b90174e76bc5a703b0be69c530204597fdbe4e928afcbfe2533ced6",
+        "runs/tk_dual_online_gemm/libdual.so": "df5122d38833606c5eae80f60e0a571a93a82ca2c8fac58c8b40dca87bf7c387"
+      },
+      "graph_us": {
+        "median_us": 48.872001469135284,
+        "min_us": 48.8164983689785,
+        "max_us": 48.98900166153908,
+        "round_us": [
+          48.89899864792824,
+          48.8164983689785,
+          48.872001469135284,
+          48.82749915122986,
+          48.98900166153908
+        ]
+      },
+      "graph_tflops": 351.5278414543715,
+      "graph_mfu_percent": 83.89685953564953,
+      "ncu_duration_us": 48.096,
+      "ncu_time_based_mfu_percent": 85.2504874102233,
+      "work_distribution": {
+        "tiles": 512,
+        "ctas": 170,
+        "min_tiles_per_cta": 3,
+        "max_tiles_per_cta": 4,
+        "ctas_with_extra_tile": 2
+      },
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "value": "48096.00",
+          "unit": "ns"
+        },
+        "sm__cycles_elapsed.avg.per_second": {
+          "value": "2871340407.42",
+          "unit": "hz"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum": {
+          "value": "17179869184.00",
+          "unit": ""
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.pct_of_peak_sustained_elapsed": {
+          "value": "71.46",
+          "unit": "%"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.peak_sustained_elapsed.per_second": {
+          "value": "499842938123752.50",
+          "unit": ""
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "value": "35.73",
+          "unit": "%"
+        },
+        "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "1.43",
+          "unit": "%"
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "66.81",
+          "unit": "%"
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "value": "100.00",
+          "unit": "%"
+        },
+        "l1tex__t_sector_hit_rate.pct": {
+          "value": "93.75",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum.pct_of_peak_sustained_elapsed": {
+          "value": "32.17",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum": {
+          "value": "7553035.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum": {
+          "value": "5808566.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum": {
+          "value": "43079.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+          "value": "365063.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+          "value": "39620.00",
+          "unit": ""
+        },
+        "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.ratio": {
+          "value": "2.00",
+          "unit": "byte/sector"
+        },
+        "smsp__warps_active.avg.per_cycle_active": {
+          "value": "2.95",
+          "unit": "warp"
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "value": "0.41",
+          "unit": "warp"
+        },
+        "smsp__issue_active.avg.pct_of_peak_sustained_active": {
+          "value": "30.97",
+          "unit": "%"
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "value": "24.74",
+          "unit": "%"
+        },
+        "derived__local_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "derived__shared_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "smsp__inst_executed_op_ldsm.sum": {
+          "value": "1310720.00",
+          "unit": "inst"
+        },
+        "smsp__inst_executed_op_shared_stsm.sum": {
+          "value": "0.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_ld.sum": {
+          "value": "524288.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_st.sum": {
+          "value": "327680.00",
+          "unit": "inst"
+        }
+      },
+      "warp_state_ratio": {
+        "barrier": 2.73,
+        "branch_resolving": 0.57,
+        "dispatch_stall": 0.09,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 1.02,
+        "math_pipe_throttle": 1.39,
+        "membar": 0.0,
+        "mio_throttle": 0.2,
+        "misc": 0.02,
+        "no_instruction": 0.12,
+        "not_selected": 0.33,
+        "selected": 1.0,
+        "short_scoreboard": 0.5,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 1.57
+      },
+      "normalized_warp_state_percent": {
+        "barrier": 28.616352201257865,
+        "branch_resolving": 5.9748427672955975,
+        "dispatch_stall": 0.9433962264150945,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 10.69182389937107,
+        "math_pipe_throttle": 14.570230607966458,
+        "membar": 0.0,
+        "mio_throttle": 2.0964360587002098,
+        "misc": 0.20964360587002098,
+        "no_instruction": 1.257861635220126,
+        "not_selected": 3.459119496855346,
+        "selected": 10.482180293501049,
+        "short_scoreboard": 5.241090146750524,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 16.457023060796647
+      },
+      "sass_stall_hotspots": {
+        "stall_barrier": {
+          "samples": 1360.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e20",
+              "sass": "EXIT",
+              "samples": 1163.0
+            },
+            {
+              "offset": "0x3870",
+              "sass": "STS [R127], R32",
+              "samples": 169.0
+            },
+            {
+              "offset": "0x2fc0",
+              "sass": "F2I.FTZ.U32.TRUNC.NTZ R37, R81",
+              "samples": 17.0
+            },
+            {
+              "offset": "0x3580",
+              "sass": "@!P1  BRA 0x7ff49f71f6d0",
+              "samples": 7.0
+            },
+            {
+              "offset": "0x3c00",
+              "sass": "@!P1  BRA 0x7ff49f71fd50",
+              "samples": 3.0
+            }
+          ]
+        },
+        "stall_long_sb": {
+          "samples": 503.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e80",
+              "sass": "@!P0  BRA 0x7ff49f71fe60",
+              "samples": 179.0
+            },
+            {
+              "offset": "0x3e40",
+              "sass": "@!P5  BRA 0x7ff49f71fe30",
+              "samples": 170.0
+            },
+            {
+              "offset": "0x1d10",
+              "sass": "@!P0  BRA 0x7ff49f71fe60",
+              "samples": 55.0
+            },
+            {
+              "offset": "0x36d0",
+              "sass": "NOP",
+              "samples": 53.0
+            },
+            {
+              "offset": "0x3dd0",
+              "sass": "CCTL.IVALL",
+              "samples": 15.0
+            }
+          ]
+        },
+        "stall_math": {
+          "samples": 649.0,
+          "top_pcs": [
+            {
+              "offset": "0x2c10",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R56, R80, R116, R56, R146, R99, URZ",
+              "samples": 79.0
+            },
+            {
+              "offset": "0x2a80",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R44, R80, R94, R44, R146, R149, UR4",
+              "samples": 64.0
+            },
+            {
+              "offset": "0x29e0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R100, R80, R92, R100, R146, R149, URZ",
+              "samples": 52.0
+            },
+            {
+              "offset": "0x2d60",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R64, R84, R116, R64, R145, R80, URZ",
+              "samples": 49.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 38.0
+            }
+          ],
+          "percent_at_qmma": 87.211093990755
+        },
+        "stall_mio": {
+          "samples": 82.0,
+          "top_pcs": [
+            {
+              "offset": "0x2610",
+              "sass": "SHFL.IDX PT, R152, R150, R137, 0x1f",
+              "samples": 7.0
+            },
+            {
+              "offset": "0x25e0",
+              "sass": "SHFL.IDX PT, R116, R88, R134, 0x1f",
+              "samples": 6.0
+            },
+            {
+              "offset": "0x2640",
+              "sass": "SHFL.IDX PT, R90, R88, R137, 0x1f",
+              "samples": 5.0
+            },
+            {
+              "offset": "0x26a0",
+              "sass": "LDSM.16.M88.4 R96, [R97]",
+              "samples": 5.0
+            },
+            {
+              "offset": "0x2730",
+              "sass": "SHFL.IDX PT, R149, R150, R134, 0x1f",
+              "samples": 5.0
+            }
+          ]
+        },
+        "stall_short_sb": {
+          "samples": 249.0,
+          "top_pcs": [
+            {
+              "offset": "0x20e0",
+              "sass": "VIMNMX.U16x2 R98, R96, R97, !PT",
+              "samples": 40.0
+            },
+            {
+              "offset": "0x1de0",
+              "sass": "LOP3.LUT R96, R84, 0x7f807f80, RZ, 0xc0, !PT",
+              "samples": 30.0
+            },
+            {
+              "offset": "0x2790",
+              "sass": "PRMT R150, R156, 0x7771, RZ",
+              "samples": 20.0
+            },
+            {
+              "offset": "0x26b0",
+              "sass": "IADD R88, R144, 0x4420",
+              "samples": 15.0
+            },
+            {
+              "offset": "0x2720",
+              "sass": "SHF.R.U32.HI R89, RZ, 0x3, R88",
+              "samples": 15.0
+            }
+          ]
+        },
+        "stall_wait": {
+          "samples": 709.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e50",
+              "sass": "BRA 0x7ff49f71c8a0",
+              "samples": 24.0
+            },
+            {
+              "offset": "0x3e90",
+              "sass": "BRA 0x7ff49f71dd20",
+              "samples": 21.0
+            },
+            {
+              "offset": "0x3e70",
+              "sass": "SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [R81+URZ], R82",
+              "samples": 20.0
+            },
+            {
+              "offset": "0x1d20",
+              "sass": "BSYNC B0",
+              "samples": 18.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 17.0
+            }
+          ]
+        }
+      },
+      "report": "runs/tk_dw_ncu/medium.ncu-rep",
+      "raw_csv": "runs/tk_dw_ncu/medium_raw.csv",
+      "sass_csv": "runs/tk_dw_ncu/medium_sass.csv"
+    },
+    {
+      "name": "square",
+      "shape_mnk": [
+        4096,
+        4096,
+        4096
+      ],
+      "plan": {
+        "R": 16,
+        "C": 128,
+        "BK": 64,
+        "stages": 2,
+        "shared_bytes": 82944,
+        "initial_regs": 168,
+        "grid": 170,
+        "online_b": 0,
+        "fp32_output": 1,
+        "native_dy": true,
+        "swap_ab": false
+      },
+      "sha256": {
+        "experiments/profile_tk_dw_ncu.py": "e7105752c0036733a36e6cf0a2c674e976c4a3c33a87bd3475d836ce6c1788e6",
+        "cuda/persistent_dual_online_gemm.cu": "d5d1b36c9d6c5d00d605d9ff5359331a2f48f1a70a80f265bd45f0a5612b5ebf",
+        "experiments/tk_linear_backward.py": "546d3c2d0b90174e76bc5a703b0be69c530204597fdbe4e928afcbfe2533ced6",
+        "runs/tk_dual_online_gemm/libdual.so": "df5122d38833606c5eae80f60e0a571a93a82ca2c8fac58c8b40dca87bf7c387"
+      },
+      "graph_us": {
+        "median_us": 376.1430084705353,
+        "min_us": 343.03298592567444,
+        "max_us": 391.5084898471832,
+        "round_us": [
+          343.03298592567444,
+          369.874507188797,
+          376.1430084705353,
+          384.30899381637573,
+          391.5084898471832
+        ]
+      },
+      "graph_tflops": 365.390158468853,
+      "graph_mfu_percent": 87.20528841738735,
+      "ncu_duration_us": 360.224,
+      "ncu_time_based_mfu_percent": 91.05906197215288,
+      "work_distribution": {
+        "tiles": 1024,
+        "ctas": 170,
+        "min_tiles_per_cta": 6,
+        "max_tiles_per_cta": 7,
+        "ctas_with_extra_tile": 4
+      },
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "value": "360224.00",
+          "unit": "ns"
+        },
+        "sm__cycles_elapsed.avg.per_second": {
+          "value": "2371394041.09",
+          "unit": "hz"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum": {
+          "value": "137438953472.00",
+          "unit": ""
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.pct_of_peak_sustained_elapsed": {
+          "value": "92.42",
+          "unit": "%"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.peak_sustained_elapsed.per_second": {
+          "value": "412812274673536.50",
+          "unit": ""
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "value": "46.21",
+          "unit": "%"
+        },
+        "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "14.91",
+          "unit": "%"
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "71.58",
+          "unit": "%"
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "value": "94.24",
+          "unit": "%"
+        },
+        "l1tex__t_sector_hit_rate.pct": {
+          "value": "92.45",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum.pct_of_peak_sustained_elapsed": {
+          "value": "40.09",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum": {
+          "value": "58218568.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum": {
+          "value": "46242854.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum": {
+          "value": "98879.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+          "value": "1176896.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+          "value": "128704.00",
+          "unit": ""
+        },
+        "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.ratio": {
+          "value": "2.00",
+          "unit": "byte/sector"
+        },
+        "smsp__warps_active.avg.per_cycle_active": {
+          "value": "3.00",
+          "unit": "warp"
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "value": "0.44",
+          "unit": "warp"
+        },
+        "smsp__issue_active.avg.pct_of_peak_sustained_active": {
+          "value": "32.76",
+          "unit": "%"
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "value": "25.00",
+          "unit": "%"
+        },
+        "derived__local_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "derived__shared_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "smsp__inst_executed_op_ldsm.sum": {
+          "value": "10485760.00",
+          "unit": "inst"
+        },
+        "smsp__inst_executed_op_shared_stsm.sum": {
+          "value": "0.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_ld.sum": {
+          "value": "4194304.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_st.sum": {
+          "value": "1048576.00",
+          "unit": "inst"
+        }
+      },
+      "warp_state_ratio": {
+        "barrier": 2.35,
+        "branch_resolving": 0.48,
+        "dispatch_stall": 0.09,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 0.87,
+        "math_pipe_throttle": 1.51,
+        "membar": 0.0,
+        "mio_throttle": 0.22,
+        "misc": 0.02,
+        "no_instruction": 0.1,
+        "not_selected": 0.33,
+        "selected": 1.0,
+        "short_scoreboard": 0.59,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 1.58
+      },
+      "normalized_warp_state_percent": {
+        "barrier": 25.711159737417947,
+        "branch_resolving": 5.2516411378555805,
+        "dispatch_stall": 0.9846827133479213,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 9.51859956236324,
+        "math_pipe_throttle": 16.52078774617068,
+        "membar": 0.0,
+        "mio_throttle": 2.407002188183808,
+        "misc": 0.21881838074398252,
+        "no_instruction": 1.0940919037199126,
+        "not_selected": 3.6105032822757117,
+        "selected": 10.940919037199127,
+        "short_scoreboard": 6.455142231947485,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 17.28665207877462
+      },
+      "sass_stall_hotspots": {
+        "stall_barrier": {
+          "samples": 8269.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e20",
+              "sass": "EXIT",
+              "samples": 8004.0
+            },
+            {
+              "offset": "0x3870",
+              "sass": "STS [R127], R32",
+              "samples": 213.0
+            },
+            {
+              "offset": "0x2fc0",
+              "sass": "F2I.FTZ.U32.TRUNC.NTZ R37, R81",
+              "samples": 34.0
+            },
+            {
+              "offset": "0x3c00",
+              "sass": "@!P1  BRA 0x7f9aab720350",
+              "samples": 11.0
+            },
+            {
+              "offset": "0x3580",
+              "sass": "@!P1  BRA 0x7f9aab71fcd0",
+              "samples": 7.0
+            }
+          ]
+        },
+        "stall_long_sb": {
+          "samples": 3073.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e40",
+              "sass": "@!P5  BRA 0x7f9aab720430",
+              "samples": 1224.0
+            },
+            {
+              "offset": "0x3e80",
+              "sass": "@!P0  BRA 0x7f9aab720460",
+              "samples": 1111.0
+            },
+            {
+              "offset": "0x1d10",
+              "sass": "@!P0  BRA 0x7f9aab720460",
+              "samples": 383.0
+            },
+            {
+              "offset": "0x36d0",
+              "sass": "NOP",
+              "samples": 80.0
+            },
+            {
+              "offset": "0xc70",
+              "sass": "STS.U8 [R9], R26",
+              "samples": 76.0
+            }
+          ]
+        },
+        "stall_math": {
+          "samples": 5217.0,
+          "top_pcs": [
+            {
+              "offset": "0x2c10",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R56, R80, R116, R56, R146, R99, URZ",
+              "samples": 628.0
+            },
+            {
+              "offset": "0x29e0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R100, R80, R92, R100, R146, R149, URZ",
+              "samples": 531.0
+            },
+            {
+              "offset": "0x2a80",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R44, R80, R94, R44, R146, R149, UR4",
+              "samples": 519.0
+            },
+            {
+              "offset": "0x2d60",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R64, R84, R116, R64, R145, R80, URZ",
+              "samples": 414.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 359.0
+            }
+          ],
+          "percent_at_qmma": 90.16676250718804
+        },
+        "stall_mio": {
+          "samples": 715.0,
+          "top_pcs": [
+            {
+              "offset": "0x2610",
+              "sass": "SHFL.IDX PT, R152, R150, R137, 0x1f",
+              "samples": 49.0
+            },
+            {
+              "offset": "0x26a0",
+              "sass": "LDSM.16.M88.4 R96, [R97]",
+              "samples": 47.0
+            },
+            {
+              "offset": "0x2780",
+              "sass": "LDS.U16 R151, [R147+0x40]",
+              "samples": 46.0
+            },
+            {
+              "offset": "0x25e0",
+              "sass": "SHFL.IDX PT, R116, R88, R134, 0x1f",
+              "samples": 41.0
+            },
+            {
+              "offset": "0x24c0",
+              "sass": "LDSM.16.M88.4 R84, [R85]",
+              "samples": 39.0
+            }
+          ]
+        },
+        "stall_short_sb": {
+          "samples": 1966.0,
+          "top_pcs": [
+            {
+              "offset": "0x1de0",
+              "sass": "LOP3.LUT R96, R84, 0x7f807f80, RZ, 0xc0, !PT",
+              "samples": 407.0
+            },
+            {
+              "offset": "0x20e0",
+              "sass": "VIMNMX.U16x2 R98, R96, R97, !PT",
+              "samples": 350.0
+            },
+            {
+              "offset": "0x2790",
+              "sass": "PRMT R150, R156, 0x7771, RZ",
+              "samples": 159.0
+            },
+            {
+              "offset": "0x2180",
+              "sass": "VIMNMX.U16x2 R117, R98, R99, !PT",
+              "samples": 145.0
+            },
+            {
+              "offset": "0x2720",
+              "sass": "SHF.R.U32.HI R89, RZ, 0x3, R88",
+              "samples": 135.0
+            }
+          ]
+        },
+        "stall_wait": {
+          "samples": 5541.0,
+          "top_pcs": [
+            {
+              "offset": "0x1d20",
+              "sass": "BSYNC B0",
+              "samples": 177.0
+            },
+            {
+              "offset": "0x3e50",
+              "sass": "BRA 0x7f9aab71cea0",
+              "samples": 144.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 133.0
+            },
+            {
+              "offset": "0x3e70",
+              "sass": "SYNCS.PHASECHK.TRANS64.TRYWAIT P0, [R81+URZ], R82",
+              "samples": 125.0
+            },
+            {
+              "offset": "0x2e20",
+              "sass": "@!UPT UIADD3 URZ, UPT, UPT, URZ, URZ, URZ",
+              "samples": 120.0
+            }
+          ]
+        }
+      },
+      "report": "runs/tk_dw_ncu/square.ncu-rep",
+      "raw_csv": "runs/tk_dw_ncu/square_raw.csv",
+      "sass_csv": "runs/tk_dw_ncu/square_sass.csv"
+    },
+    {
+      "name": "large",
+      "shape_mnk": [
+        8192,
+        8192,
+        4096
+      ],
+      "plan": {
+        "R": 16,
+        "C": 128,
+        "BK": 64,
+        "stages": 2,
+        "shared_bytes": 82944,
+        "initial_regs": 168,
+        "grid": 170,
+        "online_b": 0,
+        "fp32_output": 1,
+        "native_dy": true,
+        "swap_ab": false
+      },
+      "sha256": {
+        "experiments/profile_tk_dw_ncu.py": "e7105752c0036733a36e6cf0a2c674e976c4a3c33a87bd3475d836ce6c1788e6",
+        "cuda/persistent_dual_online_gemm.cu": "d5d1b36c9d6c5d00d605d9ff5359331a2f48f1a70a80f265bd45f0a5612b5ebf",
+        "experiments/tk_linear_backward.py": "546d3c2d0b90174e76bc5a703b0be69c530204597fdbe4e928afcbfe2533ced6",
+        "runs/tk_dual_online_gemm/libdual.so": "df5122d38833606c5eae80f60e0a571a93a82ca2c8fac58c8b40dca87bf7c387"
+      },
+      "graph_us": {
+        "median_us": 1465.301513671875,
+        "min_us": 1450.656533241272,
+        "max_us": 1471.6564416885376,
+        "round_us": [
+          1450.656533241272,
+          1455.7679891586304,
+          1465.301513671875,
+          1469.1230058670044,
+          1471.6564416885376
+        ]
+      },
+      "graph_tflops": 375.1827243461832,
+      "graph_mfu_percent": 89.54241631173824,
+      "ncu_duration_us": 1344.384,
+      "ncu_time_based_mfu_percent": 97.5961021251571,
+      "work_distribution": {
+        "tiles": 2048,
+        "ctas": 170,
+        "min_tiles_per_cta": 12,
+        "max_tiles_per_cta": 13,
+        "ctas_with_extra_tile": 8
+      },
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "value": "1344384.00",
+          "unit": "ns"
+        },
+        "sm__cycles_elapsed.avg.per_second": {
+          "value": "2313500939.51",
+          "unit": "hz"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum": {
+          "value": "549755813888.00",
+          "unit": ""
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.pct_of_peak_sustained_elapsed": {
+          "value": "101.54",
+          "unit": "%"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.peak_sustained_elapsed.per_second": {
+          "value": "402734243549462.06",
+          "unit": ""
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "value": "50.77",
+          "unit": "%"
+        },
+        "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "11.31",
+          "unit": "%"
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "76.51",
+          "unit": "%"
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "value": "95.96",
+          "unit": "%"
+        },
+        "l1tex__t_sector_hit_rate.pct": {
+          "value": "93.35",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum.pct_of_peak_sustained_elapsed": {
+          "value": "43.76",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum": {
+          "value": "231362561.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum": {
+          "value": "184791116.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum": {
+          "value": "244906.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+          "value": "3500642.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+          "value": "359245.00",
+          "unit": ""
+        },
+        "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.ratio": {
+          "value": "2.00",
+          "unit": "byte/sector"
+        },
+        "smsp__warps_active.avg.per_cycle_active": {
+          "value": "3.00",
+          "unit": "warp"
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "value": "0.44",
+          "unit": "warp"
+        },
+        "smsp__issue_active.avg.pct_of_peak_sustained_active": {
+          "value": "33.14",
+          "unit": "%"
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "value": "24.98",
+          "unit": "%"
+        },
+        "derived__local_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "derived__shared_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "smsp__inst_executed_op_ldsm.sum": {
+          "value": "41943040.00",
+          "unit": "inst"
+        },
+        "smsp__inst_executed_op_shared_stsm.sum": {
+          "value": "0.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_ld.sum": {
+          "value": "16777216.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_st.sum": {
+          "value": "3145728.00",
+          "unit": "inst"
+        }
+      },
+      "warp_state_ratio": {
+        "barrier": 2.29,
+        "branch_resolving": 0.45,
+        "dispatch_stall": 0.09,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 0.84,
+        "math_pipe_throttle": 1.54,
+        "membar": 0.0,
+        "mio_throttle": 0.21,
+        "misc": 0.02,
+        "no_instruction": 0.1,
+        "not_selected": 0.33,
+        "selected": 1.0,
+        "short_scoreboard": 0.59,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 1.59
+      },
+      "normalized_warp_state_percent": {
+        "barrier": 25.30386740331492,
+        "branch_resolving": 4.972375690607735,
+        "dispatch_stall": 0.9944751381215471,
+        "drain": 0.0,
+        "lg_throttle": 0.0,
+        "long_scoreboard": 9.281767955801106,
+        "math_pipe_throttle": 17.01657458563536,
+        "membar": 0.0,
+        "mio_throttle": 2.3204419889502765,
+        "misc": 0.22099447513812157,
+        "no_instruction": 1.1049723756906078,
+        "not_selected": 3.646408839779006,
+        "selected": 11.04972375690608,
+        "short_scoreboard": 6.519337016574586,
+        "sleeping": 0.0,
+        "tex_throttle": 0.0,
+        "wait": 17.569060773480665
+      },
+      "sass_stall_hotspots": {
+        "stall_barrier": {
+          "samples": 31268.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e20",
+              "sass": "EXIT",
+              "samples": 30896.0
+            },
+            {
+              "offset": "0x3870",
+              "sass": "STS [R127], R32",
+              "samples": 269.0
+            },
+            {
+              "offset": "0x2fc0",
+              "sass": "F2I.FTZ.U32.TRUNC.NTZ R37, R81",
+              "samples": 74.0
+            },
+            {
+              "offset": "0x3580",
+              "sass": "@!P1  BRA 0x7fae9371fcd0",
+              "samples": 19.0
+            },
+            {
+              "offset": "0x3c00",
+              "sass": "@!P1  BRA 0x7fae93720350",
+              "samples": 10.0
+            }
+          ]
+        },
+        "stall_long_sb": {
+          "samples": 11304.0,
+          "top_pcs": [
+            {
+              "offset": "0x3e40",
+              "sass": "@!P5  BRA 0x7fae93720430",
+              "samples": 4909.0
+            },
+            {
+              "offset": "0x3e80",
+              "sass": "@!P0  BRA 0x7fae93720460",
+              "samples": 3802.0
+            },
+            {
+              "offset": "0x1d10",
+              "sass": "@!P0  BRA 0x7fae93720460",
+              "samples": 1641.0
+            },
+            {
+              "offset": "0xc70",
+              "sass": "STS.U8 [R9], R26",
+              "samples": 264.0
+            },
+            {
+              "offset": "0xd30",
+              "sass": "STS.U8 [R8], R29",
+              "samples": 193.0
+            }
+          ]
+        },
+        "stall_math": {
+          "samples": 20906.0,
+          "top_pcs": [
+            {
+              "offset": "0x2c10",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R56, R80, R116, R56, R146, R99, URZ",
+              "samples": 2554.0
+            },
+            {
+              "offset": "0x29e0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R100, R80, R92, R100, R146, R149, URZ",
+              "samples": 2166.0
+            },
+            {
+              "offset": "0x2a80",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R44, R80, R94, R44, R146, R149, UR4",
+              "samples": 2070.0
+            },
+            {
+              "offset": "0x2d60",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R64, R84, R116, R64, R145, R80, URZ",
+              "samples": 1638.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 1456.0
+            }
+          ],
+          "percent_at_qmma": 90.43815172677701
+        },
+        "stall_mio": {
+          "samples": 2952.0,
+          "top_pcs": [
+            {
+              "offset": "0x2610",
+              "sass": "SHFL.IDX PT, R152, R150, R137, 0x1f",
+              "samples": 206.0
+            },
+            {
+              "offset": "0x26a0",
+              "sass": "LDSM.16.M88.4 R96, [R97]",
+              "samples": 202.0
+            },
+            {
+              "offset": "0x25e0",
+              "sass": "SHFL.IDX PT, R116, R88, R134, 0x1f",
+              "samples": 196.0
+            },
+            {
+              "offset": "0x25b0",
+              "sass": "SHFL.IDX PT, R149, R119, R134, 0x1f",
+              "samples": 181.0
+            },
+            {
+              "offset": "0x2540",
+              "sass": "SHFL.IDX PT, R99, R98, R134, 0x1f",
+              "samples": 177.0
+            }
+          ]
+        },
+        "stall_short_sb": {
+          "samples": 8138.0,
+          "top_pcs": [
+            {
+              "offset": "0x1de0",
+              "sass": "LOP3.LUT R96, R84, 0x7f807f80, RZ, 0xc0, !PT",
+              "samples": 1669.0
+            },
+            {
+              "offset": "0x20e0",
+              "sass": "VIMNMX.U16x2 R98, R96, R97, !PT",
+              "samples": 1568.0
+            },
+            {
+              "offset": "0x2180",
+              "sass": "VIMNMX.U16x2 R117, R98, R99, !PT",
+              "samples": 625.0
+            },
+            {
+              "offset": "0x2790",
+              "sass": "PRMT R150, R156, 0x7771, RZ",
+              "samples": 613.0
+            },
+            {
+              "offset": "0x2720",
+              "sass": "SHF.R.U32.HI R89, RZ, 0x3, R88",
+              "samples": 572.0
+            }
+          ]
+        },
+        "stall_wait": {
+          "samples": 21727.0,
+          "top_pcs": [
+            {
+              "offset": "0x1d20",
+              "sass": "BSYNC B0",
+              "samples": 804.0
+            },
+            {
+              "offset": "0x3e50",
+              "sass": "BRA 0x7fae9371cea0",
+              "samples": 545.0
+            },
+            {
+              "offset": "0x28b0",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R108, R80, R94, R108, R146, R117, UR4",
+              "samples": 485.0
+            },
+            {
+              "offset": "0x2c20",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R60, R80, R118, R60, R146, R99, UR4",
+              "samples": 454.0
+            },
+            {
+              "offset": "0x2a20",
+              "sass": "QMMA.SF.16832.F32.E4M3.E4M3.E8 R112, R84, R118, R112, R145, R92, UR4",
+              "samples": 440.0
+            }
+          ]
+        }
+      },
+      "report": "runs/tk_dw_ncu/large.ncu-rep",
+      "raw_csv": "runs/tk_dw_ncu/large_raw.csv",
+      "sass_csv": "runs/tk_dw_ncu/large_sass.csv"
+    }
+  ],
+  "counter_cross_checks": {
+    "large_base": {
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "value": "1611136.00",
+          "unit": "ns"
+        },
+        "sm__cycles_elapsed.avg.per_second": {
+          "value": "1915558842.81",
+          "unit": "hz"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum": {
+          "value": "549755813888.00",
+          "unit": ""
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.pct_of_peak_sustained_elapsed": {
+          "value": "102.33",
+          "unit": "%"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.peak_sustained_elapsed.per_second": {
+          "value": "333460483355843.38",
+          "unit": ""
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "value": "51.16",
+          "unit": "%"
+        },
+        "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "9.44",
+          "unit": "%"
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "value": "74.01",
+          "unit": "%"
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "value": "95.96",
+          "unit": "%"
+        },
+        "l1tex__t_sector_hit_rate.pct": {
+          "value": "93.34",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum.pct_of_peak_sustained_elapsed": {
+          "value": "44.09",
+          "unit": "%"
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared.sum": {
+          "value": "231342032.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum": {
+          "value": "184802954.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum": {
+          "value": "252988.00",
+          "unit": ""
+        },
+        "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+          "value": "3492373.00",
+          "unit": ""
+        },
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+          "value": "346181.00",
+          "unit": ""
+        },
+        "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.ratio": {
+          "value": "2.00",
+          "unit": "byte/sector"
+        },
+        "smsp__warps_active.avg.per_cycle_active": {
+          "value": "3.00",
+          "unit": "warp"
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "value": "0.45",
+          "unit": "warp"
+        },
+        "smsp__issue_active.avg.pct_of_peak_sustained_active": {
+          "value": "33.50",
+          "unit": "%"
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "value": "25.00",
+          "unit": "%"
+        },
+        "derived__local_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "derived__shared_spilling_requests": {
+          "value": "0.00",
+          "unit": ""
+        },
+        "smsp__inst_executed_op_ldsm.sum": {
+          "value": "41943040.00",
+          "unit": "inst"
+        },
+        "smsp__inst_executed_op_shared_stsm.sum": {
+          "value": "0.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_ld.sum": {
+          "value": "16777216.00",
+          "unit": "inst"
+        },
+        "smsp__sass_inst_executed_op_shared_st.sum": {
+          "value": "3145728.00",
+          "unit": "inst"
+        }
+      },
+      "report": "runs/tk_dw_ncu/large_base.ncu-rep",
+      "clock_control": "base",
+      "passes": 40
+    },
+    "large_tensor_base": {
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "value": "1617440.00",
+          "unit": "ns"
+        },
+        "sm__cycles_elapsed.avg.per_second": {
+          "value": "1910686516.97",
+          "unit": "hz"
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum": {
+          "value": "549755813888.00",
+          "unit": ""
+        },
+        "sm__ops_path_tensor_src_fp8_dst_fp32_sparsity_off.sum.pct_of_peak_sustained_elapsed": {
+          "value": "102.19",
+          "unit": "%"
+        }
+      },
+      "report": "runs/tk_dw_ncu/large_tensor_base.ncu-rep",
+      "clock_control": "base",
+      "passes": 1
+    }
+  },
+  "findings": [
+    "FP8-to-FP32 dense throughput must use the datatype-specific metric. Generic tensor pipeline utilization is exactly half that metric here; 46% generic does not mean half the usable FP8a32 throughput.",
+    "The large case reports 101.54% datatype-specific sustained peak; locked-base full and one-pass checks still report about 102%. This is a profiler sustained-rate normalization result, not proof of exceeding a physical peak. Preserve raw values and use independently timed MFU against 419 TFLOPS for nominal performance.",
+    "Shared wavefront throughput is 32.17/40.09/43.76%, MIO throttle about 2.1-2.4% of normalized active-warp states; these profiles do not show saturation of aggregate shared bandwidth on RTX5090.",
+    "Large-case math-pipe throttle is 16.99% of normalized active-warp states; 90.44% of its PC samples are at QMMA. This supports a substantial Tensor Core throughput constraint.",
+    "Large-case barrier is 25.33% of normalized active-warp states; 30896/31268 barrier samples sit at EXIT after the final warpgroup BAR.SYNC. Code inspection shows the three unused producer warps wait there while the active producer works. This strongly indicates most barrier samples are idle-warp accounting, not removable critical-path time.",
+    "Large-case long-scoreboard is 9.31% of normalized active-warp states; 10352/11304 samples are at branches waiting for SYNCS.PHASECHK in producer/consumer ring waits. Do not attribute all long-scoreboard to global-scale memory latency.",
+    "Scale loads use only 2 of 32 bytes per sector (6.25% utilization) because xs[K,M/32] is read as K rows x 2 reduction scales. These are producer-only LDG.U8 operations. L1 hit rates are 92.45-93.75%, so the excessive-sector warning does not establish a proportional end-to-end speedup.",
+    "Shared read conflict counts are only 0.13% of read wavefronts in the large case. Stores have roughly 10.26% conflict overhead, but their total traffic is small relative to the GEMM loop. No register spilling was observed.",
+    "Medium has 512 tiles over 170 persistent CTAs: two CTAs get four tiles, others three. Square has 1024 (four CTAs get seven vs six); large has 2048 (eight CTAs get thirteen vs twelve). Tail imbalance is a concrete optimization target, especially medium."
+  ],
+  "next_experiments": [
+    "For medium/small workloads, compare output tile configurations that create a more even number of tasks per SM; retain the complete dW timing including FP32 epilogue.",
+    "Write X scales in a producer-friendly tiled order, e.g. [M/64,K,2] for BK64, in the existing standalone quantization kernel. Adapt other BK configurations deliberately; avoid adding a standalone scale transpose.",
+    "Try software pipelining the next dY LDSM/online quantization against current QMMA to shorten dependency gaps, while checking register pressure, spills and unchanged numerical output.",
+    "Treat larger shared-memory or occupancy redesigns as lower priority for this RTX5090 profile; do not extrapolate the result to RTX PRO 6000 without measurements there."
+  ],
+  "references": [
+    {
+      "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-structure",
+      "purpose": "Sustained-rate throughput metrics can exceed 100% in edge cases."
+    },
+    {
+      "url": "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#range-and-precision",
+      "purpose": "Metric precision and multipass limitations."
+    }
+  ]
+}

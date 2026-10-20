@@ -9,11 +9,23 @@ namespace fp8gemm::dual_online {
 namespace kt=kittens;
 template<class Tile> using Global=kt::gl<typename Tile::dtype,-1,-1,-1,-1,Tile>;
 
-template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut> struct Config {
+// Group output tile rows, traversing rows first within each column of a group.
+// The final group can be shorter. Both TMA producers and output writers must
+// use the same bijection; persistent task ownership itself is unchanged.
+__device__ __forceinline__ int2 raster_tile(int task,int ntiles,int mtiles,int group_m) {
+    if(group_m==1)return make_int2(task/ntiles,task%ntiles);
+    int group_tiles=group_m*ntiles;
+    int first_row=(task/group_tiles)*group_m;
+    int rows=min(group_m,mtiles-first_row);
+    int local=task%group_tiles;
+    return make_int2(first_row+local%rows,local/rows);
+}
+
+template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut,bool NativeDY=false> struct Config {
     using BType=std::conditional_t<OnlineB,kt::bf16,kt::fp8e4m3>;
     using OType=std::conditional_t<FloatOut,float,kt::bf16>;
     static constexpr int OC=FloatOut?C/2:C;
-    using A=kt::st_bf<4*R,BK>;
+    using A=kt::st_bf<NativeDY?BK:4*R,NativeDY?4*R:BK>;
     using B=kt::st<BType,C,BK>;
     // FP32 output is stored in two C/2 slices, preserving the BF16 kernel's
     // shared-memory budget and leaving the full FP32 accumulator in registers.
@@ -23,16 +35,17 @@ template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut> struct Config {
     struct Args {
         Global<A> a;Global<B> b;Global<O> out;
         const uint8_t *bs;
-        int ntiles,total,ktiles,n,scale_cols;
+        int ntiles,total,ktiles,n,scale_cols,mtiles,raster_group;
     };
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
 };
 
-template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut>
+template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut,bool NativeDY=false,bool SwapAB=false>
 __global__ __launch_bounds__(384,1) void dual_online_gemm(
-    const __grid_constant__ typename Config<R,C,BK,S,OnlineB,FloatOut>::Args args) {
-    using CF=Config<R,C,BK,S,OnlineB,FloatOut>;using Shared=typename CF::Shared;
+    const __grid_constant__ typename Config<R,C,BK,S,OnlineB,FloatOut,NativeDY>::Args args) {
+    static_assert(!SwapAB || (NativeDY && !OnlineB && FloatOut));
+    using CF=Config<R,C,BK,S,OnlineB,FloatOut,NativeDY>;using Shared=typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> alloc(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid();
@@ -46,7 +59,8 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
         if(warp==0) {
             bool leader=kt::warp::elect_leader();int last=0;
             for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
-                int mr=task/args.ntiles*(8*R),nc=task%args.ntiles*C;
+                int2 coord=raster_tile(task,args.ntiles,args.mtiles,args.raster_group);
+                int mr=coord.x*(8*R),nc=coord.y*C;
                 for(int k=0;k<args.ktiles;++k) {
                     auto p=pipe.waitBuffer(0,shared.input);auto &tile=p.template get<0>();
                     if constexpr(!OnlineB) {
@@ -62,8 +76,13 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
                     if(leader) {
                         auto &bar=p.getBarrier();
                         kt::tma::expect_bytes(bar,8*R*BK*2+C*BK*sizeof(typename CF::BType));
-                        kt::tma::load_async(tile.a[0],args.a,{0,0,mr,k*BK},bar);
-                        kt::tma::load_async(tile.a[1],args.a,{0,0,mr+4*R,k*BK},bar);
+                        if constexpr(NativeDY) {
+                            kt::tma::load_async(tile.a[0],args.a,{0,0,k*BK,mr},bar);
+                            kt::tma::load_async(tile.a[1],args.a,{0,0,k*BK,mr+4*R},bar);
+                        } else {
+                            kt::tma::load_async(tile.a[0],args.a,{0,0,mr,k*BK},bar);
+                            kt::tma::load_async(tile.a[1],args.a,{0,0,mr+4*R,k*BK},bar);
+                        }
                         kt::tma::load_async(tile.b,args.b,{0,0,nc,k*BK},bar);
                     }
                     last=p.SlotIdx;p.submitToNextAndTrigger();pipe.moveNext();
@@ -75,13 +94,24 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
         kt::warpgroup::increase_registers<232>();
         bool writer=warp==0 && kt::warp::elect_leader();
         for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
-            kt::rt_fl<R,C> acc;kt::warp::rt_maps::zero(acc);
+            kt::rt_fl<SwapAB?C:R,SwapAB?R:C> acc;kt::warp::rt_maps::zero(acc);
             for(int k=0;k<args.ktiles;++k) {
                 auto p=pipe.waitBuffer(2,shared.input);auto &tile=p.template get<0>();
                 kt::rt_bf<R,BK> ar;
                 kt::rt_fp8e4m3<R,BK> aq;
                 kt::mxfp8_scale<R,BK> as;
-                kt::warpgroup::load(ar,tile.a[group]);
+                if constexpr(NativeDY) {
+                    auto panel=tile.a[group].template subtile<BK,R>({0,warp});
+                    kt::rt<kt::bf16,BK,R,kt::ducks::rt_layout::col> transposed;
+                    kt::warp::load(transposed,panel);
+#pragma unroll
+                    for(int i=0;i<R/16;++i)
+#pragma unroll
+                        for(int j=0;j<BK/16;++j)
+#pragma unroll
+                            for(int p=0;p<4;++p)
+                                ar.tiles[i][j].data[p]=transposed.tiles[j][i].data[p];
+                } else kt::warpgroup::load(ar,tile.a[group]);
                 if constexpr(OnlineB) {
                     // Retire BF16 A before loading the larger BF16 B tile.
                     // Keeping both live spills at R16/C128/BK64.
@@ -116,7 +146,8 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
                 } else {
                     kt::rt_fp8e4m3<C,BK> bq;
                     kt::mxfp8_scale<C,BK> bs;
-                    kt::warp::load<true>(bq,tile.b);
+                    if constexpr(SwapAB) kt::warp::load(bq,tile.b);
+                    else kt::warp::load<true>(bq,tile.b);
                     int row=threadIdx.x%32/4+8*(threadIdx.x%2);
 #pragma unroll
                     for(int i=0;i<C/16;++i) {
@@ -126,20 +157,29 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
                     }
                     p.submitToNextAndTrigger();pipe.moveNext();
                     kt::online_quantize_mxfp8(aq,as,ar);
-                    kt::warp::wmma::mma_ABt_block_scaled(acc,aq,bq,acc,as,bs);
+                    if constexpr(SwapAB) kt::warp::wmma::mma_ABt_block_scaled(acc,bq,aq,acc,bs,as);
+                    else kt::warp::wmma::mma_ABt_block_scaled(acc,aq,bq,acc,as,bs);
                 }
             }
-            int mr=task/args.ntiles*(8*R)+group*4*R,nc=task%args.ntiles*C;
+            int2 coord=raster_tile(task,args.ntiles,args.mtiles,args.raster_group);
+            int mr=coord.x*(8*R)+group*4*R,nc=coord.y*C;
 #pragma unroll
             for(int slice=0;slice<(FloatOut?2:1);++slice) {
                 if(writer) kt::tma::store_async_read_wait<0>();
                 kt::warpgroup::sync(group+1);
                 if constexpr(FloatOut) {
-                    kt::rt_fl<R,CF::OC> part;
+                    kt::rt<float,R,CF::OC,std::conditional_t<SwapAB,
+                        kt::ducks::rt_layout::col,kt::ducks::rt_layout::row>> part;
 #pragma unroll
                     for(int i=0;i<R/16;++i) {
 #pragma unroll
-                        for(int j=0;j<CF::OC/16;++j) part.tiles[i][j]=acc.tiles[i][j+slice*(CF::OC/16)];
+                        for(int j=0;j<CF::OC/16;++j) {
+                            if constexpr(SwapAB) {
+#pragma unroll
+                                for(int p=0;p<4;++p)
+                                    part.tiles[i][j].data[p]=acc.tiles[j+slice*(CF::OC/16)][i].data[p];
+                            } else part.tiles[i][j]=acc.tiles[i][j+slice*(CF::OC/16)];
+                        }
                     }
                     kt::warpgroup::store(shared.output[group],part);
                 } else kt::warpgroup::store(shared.output[group],acc);
@@ -157,32 +197,46 @@ __global__ __launch_bounds__(384,1) void dual_online_gemm(
 }
 
 static void check(cudaError_t e){if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));}
-struct PlanBase{virtual ~PlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
-template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut> struct Plan final:PlanBase {
-    using CF=Config<R,C,BK,S,OnlineB,FloatOut>;
+struct PlanBase{
+    virtual ~PlanBase()=default;
+    virtual void launch(cudaStream_t)=0;
+    virtual void info(int*)=0;
+    virtual void set_raster_group(int)=0;
+};
+template<int R,int C,int BK,int S,bool OnlineB,bool FloatOut,bool NativeDY=false,bool SwapAB=false> struct Plan final:PlanBase {
+    using CF=Config<R,C,BK,S,OnlineB,FloatOut,NativeDY>;
     typename CF::Args args;int grid,regs;
-    Plan(void*a,void*b,void*bs,void*out,int m,int n,int k,int sms):args{
-        Global<typename CF::A>(static_cast<kt::bf16*>(a),1,1,m,k),
+    Plan(void*a,void*b,void*bs,void*out,int m,int n,int k,int sms,int arows=0):args{
+        Global<typename CF::A>(static_cast<kt::bf16*>(a),1,1,NativeDY?arows:m,NativeDY?m:k),
         Global<typename CF::B>(static_cast<typename CF::BType*>(b),1,1,n,k),
         Global<typename CF::O>(static_cast<typename CF::OType*>(out),1,1,m,n),
-        static_cast<uint8_t*>(bs),(n+C-1)/C,((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,n,(k+31)/32} {
+        static_cast<uint8_t*>(bs),(n+C-1)/C,((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,n,(k+31)/32,
+        (m+8*R-1)/(8*R),1} {
         if(k%(CF::B::swizzle_bytes/sizeof(typename CF::BType)) || n%(CF::O::swizzle_bytes/sizeof(typename CF::OType)))
             throw std::runtime_error("Input/output strides must align to the TMA panels");
+        if constexpr(NativeDY) {
+            if(arows<=0 || arows>k || m%(CF::A::swizzle_bytes/2))
+                throw std::runtime_error("Invalid native dY rows/stride");
+        }
         int dev;check(cudaGetDevice(&dev));cudaDeviceProp prop;check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        check(cudaFuncSetAttribute(dual_online_gemm<R,C,BK,S,OnlineB,FloatOut>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr;check(cudaFuncGetAttributes(&attr,dual_online_gemm<R,C,BK,S,OnlineB,FloatOut>));
+        check(cudaFuncSetAttribute(dual_online_gemm<R,C,BK,S,OnlineB,FloatOut,NativeDY,SwapAB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr;check(cudaFuncGetAttributes(&attr,dual_online_gemm<R,C,BK,S,OnlineB,FloatOut,NativeDY,SwapAB>));
         regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)throw std::runtime_error("Insufficient WASP register pool or local memory spills");
     }
     void launch(cudaStream_t stream)override{
-        dual_online_gemm<R,C,BK,S,OnlineB,FloatOut><<<grid,384,CF::smem,stream>>>(args);check(cudaGetLastError());
+        dual_online_gemm<R,C,BK,S,OnlineB,FloatOut,NativeDY,SwapAB><<<grid,384,CF::smem,stream>>>(args);check(cudaGetLastError());
     }
     void info(int*d)override{d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;d[7]=OnlineB;d[8]=FloatOut;}
+    void set_raster_group(int size)override{
+        if(size<1)throw std::runtime_error("Raster group must be positive");
+        args.raster_group=std::min(size,args.mtiles);
+    }
 };
 static thread_local std::string error;
-template<bool OnlineB,bool FloatOut> PlanBase*create(void*a,void*b,void*bs,void*out,int m,int n,int k,int cfg,int sms){
-#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,OnlineB,FloatOut>(a,b,bs,out,m,n,k,sms)
+template<bool OnlineB,bool FloatOut,bool NativeDY=false,bool SwapAB=false> PlanBase*create(void*a,void*b,void*bs,void*out,int m,int n,int k,int cfg,int sms,int arows=0){
+#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,OnlineB,FloatOut,NativeDY,SwapAB>(a,b,bs,out,m,n,k,sms,arows)
     switch(cfg){
         CFG(0,16,32,64,2);CFG(1,16,64,64,2);CFG(2,16,128,32,2);CFG(3,16,128,64,2);
         CFG(4,32,64,32,2);CFG(5,32,32,64,2);CFG(6,16,64,64,3);CFG(7,16,32,128,2);
@@ -200,9 +254,25 @@ extern "C" void*tk_dual_create(void*a,void*b,void*bs,void*out,int m,int n,int k,
         return fp32?create<false,true>(a,b,bs,out,m,n,k,cfg,sms):create<false,false>(a,b,bs,out,m,n,k,cfg,sms);
     }catch(const std::exception&e){error=e.what();return nullptr;}
 }
+extern "C" void*tk_dual_create_native_dy(void*a,void*b,void*bs,void*out,
+    int m,int n,int k,int arows,int cfg,int sms,int swap){
+    using namespace fp8gemm::dual_online;
+    try{
+        if(m<=0 || n<=0 || k<=0 || !a || !b || !bs || !out)throw std::runtime_error("Invalid shape or pointers");
+        return swap?create<false,true,true,true>(a,b,bs,out,m,n,k,cfg,sms,arows):
+                    create<false,true,true,false>(a,b,bs,out,m,n,k,cfg,sms,arows);
+    }catch(const std::exception&e){error=e.what();return nullptr;}
+}
 extern "C" int tk_dual_launch(void*p,void*s){
     try{static_cast<fp8gemm::dual_online::PlanBase*>(p)->launch(static_cast<cudaStream_t>(s));return 0;}
     catch(const std::exception&e){fp8gemm::dual_online::error=e.what();return -1;}
 }
 extern "C" void tk_dual_info(void*p,int*d){static_cast<fp8gemm::dual_online::PlanBase*>(p)->info(d);}
+// Configure before launching/capturing the plan; preserves the create/info ABI.
+extern "C" int tk_dual_set_raster_group(void*p,int size){
+    try{
+        if(!p)throw std::runtime_error("Invalid plan");
+        static_cast<fp8gemm::dual_online::PlanBase*>(p)->set_raster_group(size);return 0;
+    }catch(const std::exception&e){fp8gemm::dual_online::error=e.what();return -1;}
+}
 extern "C" void tk_dual_destroy(void*p){delete static_cast<fp8gemm::dual_online::PlanBase*>(p);}

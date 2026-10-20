@@ -7,6 +7,9 @@ cache is required. dX uses swapAB: original weights are transposed by LDSM into
 the native A operand, while dY is quantized online as B. Only an incompatible
 weight row stride needs a non-transposing row-padding copy. All required
 preparation is included in each backward call.
+
+dW reads the same original-orientation BF16 dY buffer via transposing LDSM,
+then quantizes per output-feature/M32. The default no longer materializes dY^T.
 """
 import ctypes as ct
 from functools import lru_cache
@@ -77,9 +80,13 @@ class LinearBackwardPlan:
     transpose_weight=True retains the previous dX path for paired measurements.
     swap_ab=False retains direct AB with FP8 W as B. By default swapAB is used
     whenever transpose_weight=False; all three paths return the same layout.
+    dw_native_dy=True (default) avoids materializing dY^T by using BF16 transposing
+    LDSM; dw_swap_ab=True also exchanges dW's MMA operands (experimental).
+    dw_raster_group groups dW output-row tiles for L2 reuse; 1 is row-major.
     Keep the plan alive until its GPU work finishes, including graph replay.
     """
-    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None,*,transpose_weight=False,swap_ab=None):
+    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None,*,transpose_weight=False,
+                 swap_ab=None,dw_native_dy=True,dw_swap_ab=False,dw_raster_group=1):
         if x.ndim!=2 or dy.ndim!=2 or w.ndim!=2 or dy.shape[0]!=x.shape[0] or w.shape!=(dy.shape[1],x.shape[1]):
             raise ValueError('Expected x[M,K], dy[M,N], weight[N,K]')
         m,k=x.shape;n=dy.shape[1]
@@ -95,12 +102,15 @@ class LinearBackwardPlan:
         self.mp,self.np,self.kp=mp,np,kp=tuple((v+63)//64*64 for v in (m,n,k))
         self.bias=bool(bias)
         self.transpose_weight=transpose_weight
+        self.dw_native_dy=bool(dw_native_dy)
+        if dw_swap_ab and not dw_native_dy:
+            raise ValueError('dW swapAB experiment requires native dY')
         self.swap_ab=not transpose_weight if swap_ab is None else bool(swap_ab)
         if transpose_weight and self.swap_ab:
             raise ValueError('swapAB requires original weight orientation')
         def empty(shape,dtype):return torch.empty(shape,device=x.device,dtype=dtype)
         self.dyp=empty((m,np),torch.bfloat16)
-        self.dyt=empty((np,mp),torch.bfloat16)
+        self.dyt=None if dw_native_dy else empty((np,mp),torch.bfloat16)
         if transpose_weight:
             self.wt=empty((kp,np),torch.float8_e4m3fn)
             self.wst=empty((kp//32,np//32),torch.uint8)
@@ -134,14 +144,21 @@ class LinearBackwardPlan:
             self.dx_plan=g.plan(self.dyp,self.wt,dx_config,out=self.dxp,scales=self.wst)
         else:
             self.dx_plan=g.plan_ab(self.dyp,self.w_direct,ws,dx_config,out=self.dxp,swap_ab=self.swap_ab)
-        self.dw_plan=d.plan(self.dyt,self.xq,dw_config,out=self.dwp,output_dtype=torch.float32,b_scales=self.xs)
+        if dw_native_dy:
+            self.dw_plan=d.plan_native_dy(self.dyp,self.xq,self.xs,dw_config,out=self.dwp,
+                                          swap_ab=dw_swap_ab,raster_group=dw_raster_group)
+        else:
+            self.dw_plan=d.plan(self.dyt,self.xq,dw_config,out=self.dwp,output_dtype=torch.float32,
+                               b_scales=self.xs,raster_group=dw_raster_group)
         self.info={'shape_mnk':[m,n,k],'padded_mnk':[mp,np,kp], 'dx':self.dx_plan.info,'dw':self.dw_plan.info,
                    'bias':self.bias,'weight_transpose_each_call':transpose_weight,
                    'weight_row_padding':not transpose_weight and k!=self.dx_stride,
-                   'weight_row_stride':self.dx_stride,'swap_ab':self.swap_ab}
+                   'weight_row_stride':self.dx_stride,'swap_ab':self.swap_ab,
+                   'dy_transpose_each_call':not dw_native_dy,'dw_swap_ab':bool(dw_swap_ab)}
 
     def prepare_dy(self):
-        _check(self.lib.linear_prepare_dy(self.dy.data_ptr(),self.dyp.data_ptr(),self.dyt.data_ptr(),self.partial.data_ptr(),
+        _check(self.lib.linear_prepare_dy(self.dy.data_ptr(),self.dyp.data_ptr(),
+            self.dyt.data_ptr() if self.dyt is not None else 0,self.partial.data_ptr(),
             self.m,self.n,self.mp,self.np,*self.dy.stride(),int(self.bias),torch.cuda.current_stream(self.x.device).cuda_stream))
 
     def prepare_weight(self):

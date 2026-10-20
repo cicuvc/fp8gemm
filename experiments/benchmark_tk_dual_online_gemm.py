@@ -101,15 +101,39 @@ def assembly(output, cuda):
         for prefix in ['UTMALDG', 'UTMASTG', 'LDSM', 'QMMA.SF', 'USETMAXREG']:
             assert any(op.startswith(prefix) for op in ops), (name, prefix)
         assert not any(op.startswith(('STG','LDL','STL','CALL')) for op in ops), (name,ops)
-        online = 'ELb1ELb' in name
+        flags=re.search(r'ELb([01])ELb([01])ELb([01])ELb([01])E',name)
+        assert flags,name
+        online,fp32,native_dy,swap_ab=[v=='1' for v in flags.groups()]
         loads = list(re.finditer(r'\sLDG\.[^;]+;', section))
         if online: assert not loads, name
         else:
             producer = section.index('USETMAXREG.DEALLOC')
             consumer = section.index('USETMAXREG.TRY_ALLOC')
             assert loads and all(producer < load.start() < consumer for load in loads), name
-        result[name] = {'opcodes':dict(ops), 'online_b':online, 'consumer_direct_global_access':False}
-    assert len(result)==32
+        definitions,qmma,direct={},0,0
+        for line in section.splitlines():
+            match=re.search(r'/\*([0-9a-f]+)\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)\s+([^;]+);',line)
+            if not match:continue
+            pc,op,body=match.groups();operands=[o.strip() for o in body.split(',')]
+            if op.startswith('QMMA'):
+                qmma+=1
+                base=int(re.match(r'R(\d+)',operands[1 if swap_ab else 2])[1])
+                origins=[definitions.get(base+i) for i in range(4 if swap_ab else 2)]
+                if (all(o and o[0]=='LDSM.16.M88.4' for o in origins)
+                        and len({o[1] for o in origins})==1):direct+=1
+            dest=operands[1] if op.startswith('SHFL') else operands[0]
+            if re.fullmatch(r'R\d+',dest):
+                base=int(dest[1:])
+                width=(4 if op.startswith(('QMMA','LDSM')) or '.128' in op else
+                       2 if '.64' in op or op.startswith(('IMAD.WIDE','LEA.WIDE')) else 1)
+                for i in range(width):definitions[base+i]=(op,pc)
+        if not online:assert direct==qmma>0,(name,direct,qmma)
+        if native_dy:assert 'LDSM.16.MT88.4' in ops,name
+        result[name] = {'opcodes':dict(ops), 'online_b':online,'fp32_output':fp32,
+                        'native_dy':native_dy,'swap_ab':swap_ab,
+                        'qmma_count':qmma,'cached_x_operands_direct_from_ldsm':direct,
+                        'consumer_direct_global_access':False}
+    assert len(result)==48
     return result
 
 

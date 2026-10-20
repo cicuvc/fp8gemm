@@ -27,7 +27,8 @@ def initialized_plan(*args,**kwargs):
 
 @pytest.mark.parametrize('shape',[(1,31,33),(17,97,65),(137,192,128),(257,320,192)])
 @pytest.mark.parametrize('bias',[False,True])
-def test_exact_backward(shape,bias):
+@pytest.mark.parametrize('dw_mode',['baseline','native','swap'])
+def test_exact_backward(shape,bias,dw_mode):
     m,n,k=shape
     xc=exact_input(m,k,73);dc=exact_input(m,n,29)
     wc=exact_input(n,k,17).float()
@@ -40,7 +41,7 @@ def test_exact_backward(shape,bias):
     # Both operands strided, including their last dimension.
     x=xc.cuda().T.contiguous().T
     dy=dc.cuda().T.contiguous().T
-    p=initialized_plan(dy,x,w,ws,bias)
+    p=initialized_plan(dy,x,w,ws,bias,dw_native_dy=dw_mode!='baseline',dw_swap_ab=dw_mode=='swap')
     actual=p()
     torch.testing.assert_close(actual[0].cpu(),dx,rtol=0,atol=0)
     torch.testing.assert_close(actual[1].cpu(),dw,rtol=0,atol=0)
@@ -59,12 +60,13 @@ def test_exact_backward(shape,bias):
     torch.testing.assert_close(p.dw.cpu(),dw,rtol=0,atol=0)
 
 
-def test_stream_and_graph():
+@pytest.mark.parametrize('dw_mode',['baseline','native','swap'])
+def test_stream_and_graph(dw_mode):
     torch.manual_seed(7)
     x=torch.randn(137,65,device='cuda',dtype=torch.bfloat16)
     dy=torch.randn(137,97,device='cuda',dtype=torch.bfloat16)
     w,ws=mxtest.launch_weight_quantize(torch.randn(97,65,device='cuda'))
-    p=initialized_plan(dy,x,w,ws)
+    p=initialized_plan(dy,x,w,ws,dw_native_dy=dw_mode!='baseline',dw_swap_ab=dw_mode=='swap')
     p();torch.cuda.synchronize()
     expected=tuple(t.clone() for t in (p.dx,p.dw,p.db))
     s=torch.cuda.Stream();s.wait_stream(torch.cuda.current_stream())
@@ -75,6 +77,25 @@ def test_stream_and_graph():
     with torch.cuda.graph(g):p()
     dy.zero_();g.replay()
     for t in (p.dx,p.dw,p.db):assert torch.count_nonzero(t).item()==0
+
+
+@pytest.mark.parametrize('config',range(8))
+@pytest.mark.parametrize('swap_ab',[False,True])
+def test_native_dw_persistent_tail(config,swap_ab):
+    m,n,k=193,321,192
+    xc=exact_input(m,k,73);dc=exact_input(m,n,29)
+    w,ws=mxtest.launch_weight_quantize(exact_input(n,k,17).float().cuda())
+    p=initialized_plan(dc.cuda(),xc.cuda(),w,ws,dw_config=config,
+                       dw_native_dy=True,dw_swap_ab=swap_ab)
+    owner=p.dw_plan.owner
+    p.dw_plan=owner.plan_native_dy(p.dyp,p.xq,p.xs,config,out=p.dwp,sms=2,swap_ab=swap_ab)
+    assert p.dyt is None
+    ref=(quant_rows(dc.T.contiguous()).double() @ quant_rows(xc.T.contiguous()).double().T).float()
+    torch.testing.assert_close(p()[1].cpu(),ref,rtol=0,atol=0)
+    dc[:32]=0
+    p.dy.copy_(dc)
+    changed=(quant_rows(dc.T.contiguous()).double() @ quant_rows(xc.T.contiguous()).double().T).float()
+    torch.testing.assert_close(p()[1].cpu(),changed,rtol=0,atol=0)
 
 
 @pytest.mark.parametrize('config',[0,1,2,3,4,6,7,8,9])

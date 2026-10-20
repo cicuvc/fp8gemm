@@ -28,9 +28,27 @@ class DualOnlineLibrary:
         self.lib.tk_dual_info.argtypes=[ct.c_void_p,ct.POINTER(ct.c_int)]
         self.lib.tk_dual_destroy.argtypes=[ct.c_void_p]
         self.lib.tk_dual_error.restype=ct.c_char_p
+        if hasattr(self.lib,'tk_dual_set_raster_group'):
+            self.lib.tk_dual_set_raster_group.argtypes=[ct.c_void_p,ct.c_int]
+            self.lib.tk_dual_set_raster_group.restype=ct.c_int
+        if hasattr(self.lib,'tk_dual_create_native_dy'):
+            self.lib.tk_dual_create_native_dy.argtypes=[ct.c_void_p]*4+[ct.c_int]*7
+            self.lib.tk_dual_create_native_dy.restype=ct.c_void_p
 
-    def plan(self,a,b,config=3,out=None,output_dtype=torch.bfloat16,sms=0,b_scales=None):
-        return DualOnlinePlan(self,a,b,config,out,output_dtype,sms,b_scales)
+    def plan(self,a,b,config=3,out=None,output_dtype=torch.bfloat16,sms=0,b_scales=None,*,raster_group=1):
+        return DualOnlinePlan(self,a,b,config,out,output_dtype,sms,b_scales,raster_group=raster_group)
+
+    def plan_native_dy(self,dy,xq,scales,config=3,out=None,sms=0,*,swap_ab=False,raster_group=1):
+        """FP32 dW[N,K] from BF16 dy[M,N], FP8 xq[K,Mp], scales[K,Mp/32].
+
+        TMA zero-fills missing dy rows (M<=Mp); N/K/Mp align to standard panels.
+        Native transposing BF16 LDSM replaces the global dY transpose.
+        swap_ab additionally exchanges the MMA operands and transposes FP32
+        output into shared memory before TMA. No dY^T allocation is needed.
+        raster_group groups output rows (N tiles); 1 retains row-major order.
+        """
+        return DualOnlinePlan(self,dy,xq,config,out,torch.float32,sms,scales,
+                              native_dy=True,swap_ab=swap_ab,raster_group=raster_group)
 
 
 class DualOnlinePlan:
@@ -45,11 +63,19 @@ class DualOnlinePlan:
     No implicit input transpose, weight refresh or autograd registration.
     The plan retains all allocations; keep it alive until GPU work completes.
     """
-    def __init__(self,owner,a,b,config,out,dtype,sms,scales):
+    def __init__(self,owner,a,b,config,out,dtype,sms,scales,*,native_dy=False,swap_ab=False,raster_group=1):
         self.handle=None
-        if not 0<=config<len(CONFIGS) or a.ndim!=2 or b.ndim!=2 or a.shape[1]!=b.shape[1]:
+        if isinstance(raster_group,bool) or not isinstance(raster_group,int) or not 1<=raster_group<=2**31-1:
+            raise ValueError('raster_group must be a positive int32')
+        if (not 0<=config<len(CONFIGS) or a.ndim!=2 or b.ndim!=2 or
+                (not native_dy and a.shape[1]!=b.shape[1])):
             raise ValueError('Expected A[M,K] and B[N,K], valid configuration')
-        m,k=a.shape;n=b.shape[0];online=scales is None
+        m,k=(a.shape[1],b.shape[1]) if native_dy else a.shape
+        n=b.shape[0];online=scales is None
+        if swap_ab and not native_dy:
+            raise ValueError('swapAB requires native dY')
+        if native_dy and (online or dtype!=torch.float32 or not 0<a.shape[0]<=k or m%64):
+            raise ValueError('Native dY requires FP32 output, cached FP8 X, aligned dY width, and rows <= reduction width')
         if min(m,n,k)<=0 or n%64 or k%(128 if config==7 else 64):
             raise ValueError('N/K must align to the selected TMA panels')
         if a.dtype!=torch.bfloat16 or b.dtype!=(torch.bfloat16 if online else torch.float8_e4m3fn):
@@ -69,11 +95,22 @@ class DualOnlinePlan:
                 raise ValueError('Output must not overlap inputs')
         self.owner,self.a,self.b,self.scales,self.out=owner,a,b,scales,out
         with torch.cuda.device(a.device):
-            self.handle=owner.lib.tk_dual_create(a.data_ptr(),b.data_ptr(),None if scales is None else scales.data_ptr(),
-                out.data_ptr(),m,n,k,config,sms,int(online),int(dtype==torch.float32))
+            if native_dy:
+                self.handle=owner.lib.tk_dual_create_native_dy(a.data_ptr(),b.data_ptr(),scales.data_ptr(),
+                    out.data_ptr(),m,n,k,a.shape[0],config,sms,int(swap_ab))
+            else:
+                self.handle=owner.lib.tk_dual_create(a.data_ptr(),b.data_ptr(),None if scales is None else scales.data_ptr(),
+                    out.data_ptr(),m,n,k,config,sms,int(online),int(dtype==torch.float32))
         if not self.handle:raise RuntimeError(owner.lib.tk_dual_error().decode())
+        if raster_group!=1:
+            if not hasattr(owner.lib,'tk_dual_set_raster_group'):
+                raise RuntimeError('Rebuild CUDA library for grouped rasterization')
+            if owner.lib.tk_dual_set_raster_group(self.handle,raster_group):
+                raise RuntimeError(owner.lib.tk_dual_error().decode())
         info=(ct.c_int*9)();owner.lib.tk_dual_info(self.handle,info)
         self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid','online_b','fp32_output'],info))
+        self.info.update(native_dy=bool(native_dy),swap_ab=bool(swap_ab),
+                         raster_group=min(raster_group,(m+8*CONFIGS[config][0]-1)//(8*CONFIGS[config][0])))
 
     def __call__(self):
         with torch.cuda.device(self.a.device):
