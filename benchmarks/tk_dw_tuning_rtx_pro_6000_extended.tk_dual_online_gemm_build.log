@@ -1,0 +1,563 @@
+third_party/thunderkittens/include/ops/device/../../types/global/../register/rt.cuh(76): warning #20012-D: __device__ annotation is ignored on a non-virtual function("rt") that is explicitly defaulted on its first declaration
+      __attribute__((device)) inline rt() = default;
+                     ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+third_party/thunderkittens/include/ops/device/../../types/global/../register/rt.cuh(76): warning #20012-D: __device__ annotation is ignored on a non-virtual function("rt") that is explicitly defaulted on its first declaration
+      __attribute__((device)) inline rt() = default;
+                     ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=32, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=64, _cols=16]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=64, _cols=32]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=64, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=64, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=64, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=64, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=64, _cols=64]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=128, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=128, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=128, _cols=32]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=32, C=64, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=64, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=64, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=32, C=64, BK=32, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=128, _cols=16]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=32, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=32, C=32, BK=64, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=64, _cols=128]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=32, _cols=128]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=128, S=2, OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=true, FloatOut=true, NativeDY=false, SwapAB=false]" at line 264 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=64, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=64, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=64, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=64, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=64, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=128, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=128, _cols=64]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=128, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=128, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=128, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=128, BK=64, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 241 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=64, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=32, C=64, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=32, C=64, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=64, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=64, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=32, C=64, BK=32, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=128]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=32, BK=128, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=32, BK=128, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=32, BK=128, S=2, OnlineB=false, FloatOut=true, NativeDY=false]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=32, BK=128, S=2, OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 242 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=false, SwapAB=false]" at line 265 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=128, _cols=64]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=32, C=128, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=128, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=32, C=128, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=32, C=128, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 250 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=256, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 250 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=64, _cols=128]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=16, C=256, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 250 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::bf16, _rows=32, _cols=256]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 252 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=kittens::fp8e4m3, _rows=32, _cols=32]" at line 33 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Packet [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 252 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+third_party/thunderkittens/include/ops/device/../../types/global/../shared/st.cuh(28): warning #1160-D: a reduction in alignment without the "packed" attribute is ignored
+  struct __attribute__((aligned(128))) st {
+                        ^
+          detected during:
+            instantiation of class "kittens::st<_T, _rows, _cols> [with _T=float, _rows=256, _cols=16]" at line 34 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY>::Shared [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 40 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 41 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Config<R, C, BK, S, OnlineB, FloatOut, NativeDY> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true]" at line 208 of cuda/persistent_dual_online_gemm.cu
+            instantiation of class "fp8gemm::dual_online::Plan<R, C, BK, S, OnlineB, FloatOut, NativeDY, SwapAB> [with R=64, C=32, BK=32, S=1, OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 252 of cuda/persistent_dual_online_gemm.cu
+            instantiation of "fp8gemm::dual_online::PlanBase *fp8gemm::dual_online::create<OnlineB,FloatOut,NativeDY,SwapAB>(void *, void *, void *, void *, int, int, int, int, int, int) [with OnlineB=false, FloatOut=true, NativeDY=true, SwapAB=false]" at line 274 of cuda/persistent_dual_online_gemm.cu
+
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 34.714 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi64ELi32ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi64ELi32ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 36.773 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.146 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.422 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi256ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi256ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 49.239 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi128ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi128ELi32ELi1ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 51.014 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.965 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.581 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 35.640 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 34.395 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 41.645 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.154 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.305 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb1ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 25.781 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.781 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 29.312 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.799 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.417 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 39.141 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.299 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 27.882 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb1ELb1EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 26.588 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.763 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.707 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.589 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 27.936 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 34.841 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 25.973 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 26.615 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 23.325 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 33.977 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 28.989 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.174 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 31.338 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 39.062 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.121 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.645 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb0ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 24.549 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 51.836 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 46.510 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 40.091 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 38.297 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 88.130 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 48.974 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 46.995 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb1ELb0ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 30.770 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi128ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 55.012 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi3ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 49.787 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 42.975 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi32ELi64ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 44.184 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 93.742 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi128ELi32ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 58.664 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi64ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 52.926 ms
+ptxas info    : Compiling entry function '_ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN7fp8gemm11dual_online16dual_online_gemmILi16ELi32ELi64ELi2ELb1ELb1ELb0ELb0EEEvNS0_6ConfigIXT_EXT0_EXT1_EXT2_EXT3_EXT4_EXT5_EE4ArgsE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 32.795 ms

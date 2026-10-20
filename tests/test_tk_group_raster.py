@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from experiments.tk_linear_backward import LinearBackwardPlan, libraries
+from experiments.tk_dual_online_gemm import NATIVE_DW_CONFIGS
 from experiments.benchmark_tk_dual_online_gemm import exact_input, quantized_a
 import mxtest
 
@@ -30,8 +31,8 @@ def operands():
     return p, ref
 
 
-@pytest.mark.parametrize("config", range(8))
-@pytest.mark.parametrize("swap", [False, True])
+@pytest.mark.parametrize("config,swap", [(c, False) for c in range(len(NATIVE_DW_CONFIGS))] +
+                         [(c, True) for c in range(8)])
 def test_grouped_native_dw(operands, config, swap):
     p, ref = operands
     out = torch.full_like(p.dwp, float("nan"))

@@ -1,6 +1,7 @@
 """Build/test CUDA FP8Linear kernels on Modal RTX PRO 6000, then benchmark.
 
 python -m modal run experiments/modal_tk_linear.py
+python -m modal run experiments/modal_tk_linear.py --tune-dw --rounds 5 --repeats 16
 """
 import hashlib
 import json
@@ -16,6 +17,7 @@ SOURCES = [
     "experiments/tk_linear_backward.py", "experiments/benchmark_tk_persistent_gemm.py",
     "experiments/benchmark_tk_dual_online_gemm.py",
     "experiments/benchmark_tk_linear_training.py",
+    "experiments/benchmark_tk_dw_tuning.py",
     "tests/test_tk_linear_backward.py", "tests/test_tk_group_raster.py",
     "cuda/persistent_fp8_gemm.cu", "cuda/persistent_dual_online_gemm.cu",
     "cuda/linear_backward_prepare.cu", "cuda/tma_ring_pipe.cuh",
@@ -40,7 +42,7 @@ cache = modal.Volume.from_name("fp8-swiglu-triton-cache", create_if_missing=True
 
 @app.function(image=image, gpu="RTX-PRO-6000", cpu=8, memory=32768,
               timeout=3600, volumes={"/cache": cache})
-def measure(manifest, rounds, repeats):
+def measure(manifest, rounds, repeats, tune_dw=False, groups=None, configs=None, backward_sweep=False):
     import os
     import sys
     from datetime import datetime, timezone
@@ -99,18 +101,30 @@ def measure(manifest, rounds, repeats):
             (outdir / f"{name}_build.log").write_text(logs[name + "_build"])
     run("tests", [sys.executable, "-m", "pytest", "-q",
                   "tests/test_tk_linear_backward.py", "tests/test_tk_group_raster.py"])
-    run("forward_validation", [sys.executable, "experiments/benchmark_tk_persistent_gemm.py",
-                              "--skip-build", "--validate-only"])
-    run("benchmark", [sys.executable, "experiments/benchmark_tk_linear_training.py",
-                      "--rounds", str(rounds), "--repeats", str(repeats),
-                      "--output", str(outdir / "benchmark.json")])
+    if not tune_dw:
+        run("forward_validation", [sys.executable, "experiments/benchmark_tk_persistent_gemm.py",
+                                  "--skip-build", "--validate-only"])
+    script = "benchmark_tk_dw_tuning.py" if tune_dw else "benchmark_tk_linear_training.py"
+    command = [sys.executable, "experiments/" + script,
+               "--rounds", str(rounds), "--repeats", str(repeats),
+               "--output", str(outdir / "benchmark.json")]
+    if tune_dw:
+        if backward_sweep:
+            command += ["--backward-sweep"]
+        if groups:
+            command += ["--groups", *map(str, groups)]
+        if configs:
+            command += ["--configs", *map(str, configs)]
+    run("benchmark", command)
     result = json.loads((outdir / "benchmark.json").read_text())
     metadata["nvidia_smi_after"] = subprocess.check_output(["nvidia-smi"], text=True)
     result["modal_environment"] = metadata
     result["validation"] = {
         "tests": logs["tests"],
-        "forward": json.loads(Path("runs/tk_persistent_gemm/validation.json").read_text()),
     }
+    if not tune_dw:
+        result["validation"]["forward"] = json.loads(
+            Path("runs/tk_persistent_gemm/validation.json").read_text())
     (outdir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     cache.commit()
     return result, logs
@@ -118,7 +132,10 @@ def measure(manifest, rounds, repeats):
 
 @app.local_entrypoint()
 def main(rounds: int = 9, repeats: int = 64,
-         output: str = "benchmarks/tk_linear_training_rtx_pro_6000.json"):
+         output: str = "", tune_dw: bool = False, groups: str = "", configs: str = "",
+         backward_sweep: bool = False):
+    if (groups or configs or backward_sweep) and not tune_dw:
+        raise ValueError("--groups/--configs/--backward-sweep require --tune-dw")
     files = [ROOT / p for p in SOURCES]
     files += [p for p in (ROOT / "third_party/thunderkittens").rglob("*") if p.is_file()]
     manifest = {
@@ -126,8 +143,12 @@ def main(rounds: int = 9, repeats: int = 64,
         "git_status": subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True).strip(),
         "sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
     }
-    result, logs = measure.remote(manifest, rounds, repeats)
-    path = Path(output)
+    result, logs = measure.remote(manifest, rounds, repeats, tune_dw,
+                                 [int(x) for x in groups.split(",")] if groups else None,
+                                 [int(x) for x in configs.split(",")] if configs else None,
+                                 backward_sweep)
+    path = Path(output or ("benchmarks/tk_dw_tuning_rtx_pro_6000.json" if tune_dw else
+                           "benchmarks/tk_linear_training_rtx_pro_6000.json"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2) + "\n")
     for label, log in logs.items():

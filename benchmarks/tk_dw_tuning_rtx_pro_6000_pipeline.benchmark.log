@@ -1,0 +1,30 @@
+(256, 2048, 512): validated 42 variants, skipped 0
+(256, 2048, 512): sweep complete, leading candidates ['c16_g1', 'c6_g1', 'c16_g4', 'c6_g4', 'c6_g8', 'c6_g10']
+(256, 2048, 512): full-backward sweep complete, leaders ['c16_g1', 'c6_g1', 'c16_g4', 'c6_g4', 'c16_g8', 'c16_g10']
+(256, 2048, 512): dW retest complete, best=c16_g1; retesting 12 full-backward variants
+(256, 2048, 512) dw_retest: c3_g1=6.876us, c16_g1=5.052us (1.361x)
+(256, 2048, 512) backward_retest: c3_g1=30.816us, c16_g1=29.050us (1.061x)
+(1024, 8192, 1024): validated 84 variants, skipped 0
+(1024, 8192, 1024): sweep complete, leading candidates ['c15_g24', 'c15_g12', 'c15_g8', 'c15_g26', 'c15_g1', 'c15_g14']
+(1024, 8192, 1024): full-backward sweep complete, leaders ['c15_g1', 'c15_g24', 'c15_g28', 'c15_g8', 'c15_g26', 'c15_g12']
+(1024, 8192, 1024): dW retest complete, best=c15_g26; retesting 18 full-backward variants
+(1024, 8192, 1024) dw_retest: c3_g1=45.295us, c15_g26=42.792us (1.057x)
+(1024, 8192, 1024) backward_retest: c3_g1=136.804us, c15_g24=134.420us (1.018x)
+(2048, 16384, 2048): validated 90 variants, skipped 0
+(2048, 16384, 2048): sweep complete, leading candidates ['c15_g20', 'c15_g48', 'c11_g32', 'c15_g28', 'c15_g32', 'c15_g16']
+(2048, 16384, 2048): full-backward sweep complete, leaders ['c15_g28', 'c15_g32', 'c15_g10', 'c15_g20', 'c15_g128', 'c15_g14']
+(2048, 16384, 2048): dW retest complete, best=c15_g28; retesting 23 full-backward variants
+(2048, 16384, 2048) dw_retest: c3_g1=355.224us, c15_g28=324.445us (1.095x)
+(2048, 16384, 2048) backward_retest: c3_g1=862.396us, c15_g32=824.829us (1.046x)
+(4096, 4096, 4096): validated 72 variants, skipped 0
+(4096, 4096, 4096): sweep complete, leading candidates ['c15_g16', 'c15_g14', 'c15_g28', 'c15_g20', 'c15_g26', 'c15_g8']
+(4096, 4096, 4096): full-backward sweep complete, leaders ['c15_g32', 'c11_g32', 'c15_g28', 'c15_g26', 'c11_g26', 'c15_g20']
+(4096, 4096, 4096): dW retest complete, best=c15_g26; retesting 23 full-backward variants
+(4096, 4096, 4096) dw_retest: c3_g1=336.191us, c15_g26=322.719us (1.042x)
+(4096, 4096, 4096) backward_retest: c3_g1=735.047us, c11_g32=708.360us (1.037x)
+(8192, 8192, 4096): validated 84 variants, skipped 0
+(8192, 8192, 4096): sweep complete, leading candidates ['c15_g12', 'c15_g4', 'c15_g10', 'c15_g8', 'c15_g16', 'c15_g1']
+(8192, 8192, 4096): full-backward sweep complete, leaders ['c15_g8', 'c15_g1', 'c11_g12', 'c15_g32', 'c15_g12', 'c15_g10']
+(8192, 8192, 4096): dW retest complete, best=c15_g8; retesting 19 full-backward variants
+(8192, 8192, 4096) dw_retest: c3_g1=1316.205us, c15_g8=1206.326us (1.092x)
+(8192, 8192, 4096) backward_retest: c3_g1=2773.217us, c15_g8=2657.351us (1.044x)

@@ -8,6 +8,9 @@ from experiments.tk_persistent_gemm import ROOT,FLAGS
 DEFAULT_OUTPUT=ROOT/'runs/tk_dual_online_gemm'
 CONFIGS=[(16,32,64,2),(16,64,64,2),(16,128,32,2),(16,128,64,2),
          (32,64,32,2),(32,32,64,2),(16,64,64,3),(16,32,128,2)]
+NATIVE_DW_CONFIGS=CONFIGS+[
+    (32,128,32,1),(16,256,32,1),(32,64,32,3),(16,128,32,3),
+    (64,32,32,1),(32,64,32,1),(16,256,32,2),(16,128,32,4),(16,64,64,4)]
 
 
 def build(output=DEFAULT_OUTPUT,cuda=Path('/usr/local/cuda')):
@@ -46,6 +49,8 @@ class DualOnlineLibrary:
         swap_ab additionally exchanges the MMA operands and transposes FP32
         output into shared memory before TMA. No dY^T allocation is needed.
         raster_group groups output rows (N tiles); 1 retains row-major order.
+        Configurations >=8 are additional native-dY candidates and require
+        swap_ab=False; their (R,C,BK,stages) are listed in NATIVE_DW_CONFIGS.
         """
         return DualOnlinePlan(self,dy,xq,config,out,torch.float32,sms,scales,
                               native_dy=True,swap_ab=swap_ab,raster_group=raster_group)
@@ -65,9 +70,12 @@ class DualOnlinePlan:
     """
     def __init__(self,owner,a,b,config,out,dtype,sms,scales,*,native_dy=False,swap_ab=False,raster_group=1):
         self.handle=None
+        if config>=8 and (not native_dy or swap_ab):
+            raise ValueError('Configurations >=8 require native dY without swapAB')
         if isinstance(raster_group,bool) or not isinstance(raster_group,int) or not 1<=raster_group<=2**31-1:
             raise ValueError('raster_group must be a positive int32')
-        if (not 0<=config<len(CONFIGS) or a.ndim!=2 or b.ndim!=2 or
+        configs=NATIVE_DW_CONFIGS if native_dy and not swap_ab else CONFIGS
+        if (not 0<=config<len(configs) or a.ndim!=2 or b.ndim!=2 or
                 (not native_dy and a.shape[1]!=b.shape[1])):
             raise ValueError('Expected A[M,K] and B[N,K], valid configuration')
         m,k=(a.shape[1],b.shape[1]) if native_dy else a.shape
@@ -110,7 +118,7 @@ class DualOnlinePlan:
         info=(ct.c_int*9)();owner.lib.tk_dual_info(self.handle,info)
         self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid','online_b','fp32_output'],info))
         self.info.update(native_dy=bool(native_dy),swap_ab=bool(swap_ab),
-                         raster_group=min(raster_group,(m+8*CONFIGS[config][0]-1)//(8*CONFIGS[config][0])))
+                         raster_group=min(raster_group,(m+8*configs[config][0]-1)//(8*configs[config][0])))
 
     def __call__(self):
         with torch.cuda.device(self.a.device):

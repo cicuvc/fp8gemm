@@ -13,7 +13,7 @@ import triton.language as tl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from experiments.tk_dual_online_gemm import CONFIGS, DEFAULT_OUTPUT, DualOnlineLibrary, build
+from experiments.tk_dual_online_gemm import CONFIGS, NATIVE_DW_CONFIGS, DEFAULT_OUTPUT, DualOnlineLibrary, build
 from experiments.tk_persistent_gemm import FLAGS
 from experiments.benchmark_tk_persistent_gemm import quantized_a, graph_benchmark
 import mxtest
@@ -133,7 +133,7 @@ def assembly(output, cuda):
                         'native_dy':native_dy,'swap_ab':swap_ab,
                         'qmma_count':qmma,'cached_x_operands_direct_from_ldsm':direct,
                         'consumer_direct_global_access':False}
-    assert len(result)==48
+    assert len(result)==6*len(CONFIGS)+len(NATIVE_DW_CONFIGS)-len(CONFIGS)
     return result
 
 

@@ -240,6 +240,17 @@ template<bool OnlineB,bool FloatOut,bool NativeDY=false,bool SwapAB=false> PlanB
     switch(cfg){
         CFG(0,16,32,64,2);CFG(1,16,64,64,2);CFG(2,16,128,32,2);CFG(3,16,128,64,2);
         CFG(4,32,64,32,2);CFG(5,32,32,64,2);CFG(6,16,64,64,3);CFG(7,16,32,128,2);
+        // Extra native-dY dW candidates under the 99 KiB shared-memory budget;
+        // keep generic ABt and swapped-operand instantiations unchanged.
+#define DW_CFG(ID,R,C,BK,S) case ID: \
+        if constexpr(NativeDY && !SwapAB) \
+            return new Plan<R,C,BK,S,OnlineB,FloatOut,NativeDY,SwapAB>(a,b,bs,out,m,n,k,sms,arows); \
+        else throw std::runtime_error("Configuration requires native dY without swapAB")
+        DW_CFG(8,32,128,32,1);DW_CFG(9,16,256,32,1);
+        DW_CFG(10,32,64,32,3);DW_CFG(11,16,128,32,3);
+        DW_CFG(12,64,32,32,1);DW_CFG(13,32,64,32,1);
+        DW_CFG(14,16,256,32,2);DW_CFG(15,16,128,32,4);DW_CFG(16,16,64,64,4);
+#undef DW_CFG
         default:throw std::runtime_error("Unknown configuration");
     }
 #undef CFG

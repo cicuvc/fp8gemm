@@ -1,0 +1,15 @@
+(256, 2048, 512): validated 89 variants, skipped 0
+(256, 2048, 512) dw_retest: c3_g1=7.178us, c6_g1=5.215us (1.376x)
+(256, 2048, 512) backward_retest: c3_g1=31.950us, c6_g1=30.062us (1.063x)
+(1024, 8192, 1024): validated 191 variants, skipped 0
+(1024, 8192, 1024) dw_retest: c3_g1=45.139us, c11_g26=42.955us (1.051x)
+(1024, 8192, 1024) backward_retest: c3_g1=136.476us, c11_g12=134.423us (1.015x)
+(2048, 16384, 2048): validated 196 variants, skipped 0
+(2048, 16384, 2048) dw_retest: c3_g1=350.431us, c11_g32=310.117us (1.131x)
+(2048, 16384, 2048) backward_retest: c3_g1=861.923us, c11_g32=826.851us (1.042x)
+(4096, 4096, 4096): validated 160 variants, skipped 0
+(4096, 4096, 4096) dw_retest: c3_g1=328.700us, c11_g4=306.341us (1.073x)
+(4096, 4096, 4096) backward_retest: c3_g1=721.268us, c11_g26=691.079us (1.044x)
+(8192, 8192, 4096): validated 191 variants, skipped 0
+(8192, 8192, 4096) dw_retest: c3_g1=1284.072us, c11_g10=1122.477us (1.144x)
+(8192, 8192, 4096) backward_retest: c3_g1=2649.455us, c3_g12=2606.024us (1.017x)
