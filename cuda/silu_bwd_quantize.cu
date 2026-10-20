@@ -40,10 +40,19 @@ __device__ __forceinline__ uint32_t max_exponent(
     return max(current,(values>>16)&0x7f80u);
 }
 
-__device__ __forceinline__ void cp_async_16(void *dst,const void *src) {
-    uint32_t shared=uint32_t(__cvta_generic_to_shared(dst));
-    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
-                 :: "r"(shared), "l"(src) : "memory");
+__device__ __forceinline__ uint32_t swizzled_addr(
+    const uint32_t *base,int row,int column) {
+    uint32_t address=uint32_t(__cvta_generic_to_shared(base))
+        +uint32_t((row*32+column)*sizeof(uint16_t));
+    return address^((address>>2)&0x70u);
+}
+
+__device__ __forceinline__ uint4 load_shared_v4(uint32_t address) {
+    uint4 out;
+    asm volatile("ld.shared.v4.b32 {%0, %1, %2, %3}, [%4];"
+                 : "=r"(out.x), "=r"(out.y), "=r"(out.z), "=r"(out.w)
+                 : "r"(address));
+    return out;
 }
 
 __device__ __forceinline__ void cp_async_commit() {
@@ -55,8 +64,8 @@ __device__ __forceinline__ void cp_async_wait() {
     asm volatile("cp.async.wait_group %0;" :: "n"(Pending) : "memory");
 }
 
-// Shared layout is row-major with a four-way XOR swizzle at 16-byte chunk
-// granularity. Two lanes groups copy one contiguous 64-byte row segment.
+// Shared layout is logically row-major. Every 16-byte chunk is placed at
+// address ^ ((address >> 2) & 0x70), preserving 16-byte alignment.
 __device__ __forceinline__ void load_tile(
     uint32_t *shared,const Args &args,int tile,int lane) {
     int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
@@ -69,22 +78,39 @@ __device__ __forceinline__ void load_tile(
         int linear=lane+iteration*32;
         int row=linear/kChunks;
         int chunk=linear%kChunks;
-        int destination_chunk=chunk^(row&3);
         int global_row=block_row+row;
         size_t global_col=size_t(block_col+chunk*8);
-        uint32_t *dst=dy_src+row*kRowWords+destination_chunk*4;
+        uint32_t dy_addr=swizzled_addr(dy_src,row,chunk*8);
+        uint32_t half_gate_addr=swizzled_addr(half_gate_src,row,chunk*8);
+        uint32_t up_addr=swizzled_addr(up_src,row,chunk*8);
         if(global_row<args.m) {
-            cp_async_16(dst,args.dy+size_t(global_row)*args.n+global_col);
-            cp_async_16(up_src+row*kRowWords+destination_chunk*4,
-                       args.up+size_t(global_row)*args.n+global_col);
-            cp_async_16(half_gate_src+row*kRowWords+destination_chunk*4,
-                       args.half_gate+size_t(global_row)*args.n+global_col);
+            uint32_t shared_addr;
+            shared_addr=dy_addr;
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
+                         :: "r"(shared_addr),
+                            "l"(args.dy+size_t(global_row)*args.n+global_col)
+                         : "memory");
+            shared_addr=up_addr;
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
+                         :: "r"(shared_addr),
+                            "l"(args.up+size_t(global_row)*args.n+global_col)
+                         : "memory");
+            shared_addr=half_gate_addr;
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
+                         :: "r"(shared_addr),
+                            "l"(args.half_gate+size_t(global_row)*args.n+global_col)
+                         : "memory");
         } else {
-            *reinterpret_cast<uint4*>(dst)=uint4{0,0,0,0};
-            *reinterpret_cast<uint4*>(
-                up_src+row*kRowWords+destination_chunk*4)=uint4{0,0,0,0};
-            *reinterpret_cast<uint4*>(
-                half_gate_src+row*kRowWords+destination_chunk*4)=uint4{0,0,0,0};
+            uint4 zero={0,0,0,0};
+            asm volatile("st.shared.v4.b32 [%0], {%1, %2, %3, %4};"
+                         :: "r"(dy_addr), "r"(zero.x), "r"(zero.y),
+                            "r"(zero.z), "r"(zero.w) : "memory");
+            asm volatile("st.shared.v4.b32 [%0], {%1, %2, %3, %4};"
+                         :: "r"(up_addr), "r"(zero.x), "r"(zero.y),
+                            "r"(zero.z), "r"(zero.w) : "memory");
+            asm volatile("st.shared.v4.b32 [%0], {%1, %2, %3, %4};"
+                         :: "r"(half_gate_addr), "r"(zero.x), "r"(zero.y),
+                            "r"(zero.z), "r"(zero.w) : "memory");
         }
     }
     cp_async_commit();
@@ -103,13 +129,11 @@ __device__ __forceinline__ void process_tile(
     uint32_t gate_exponent=0,up_exponent=0;
 #pragma unroll
     for(int vector=0;vector<4;vector++) {
-        int chunk=vector^(lane&3);
-        uint4 dy=reinterpret_cast<const uint4*>(
-            dy_src+lane*kRowWords)[chunk];
-        uint4 half_gate=reinterpret_cast<const uint4*>(
-            half_gate_src+lane*kRowWords)[chunk];
-        uint4 up=reinterpret_cast<const uint4*>(
-            up_src+lane*kRowWords)[chunk];
+        int column=vector*8;
+        uint4 dy=load_shared_v4(swizzled_addr(dy_src,lane,column));
+        uint4 half_gate=load_shared_v4(
+            swizzled_addr(half_gate_src,lane,column));
+        uint4 up=load_shared_v4(swizzled_addr(up_src,lane,column));
         PairGrad p0=backward_pair(dy.x,half_gate.x,up.x);
         PairGrad p1=backward_pair(dy.y,half_gate.y,up.y);
         PairGrad p2=backward_pair(dy.z,half_gate.z,up.z);
