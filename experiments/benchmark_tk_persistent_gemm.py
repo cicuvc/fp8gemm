@@ -103,8 +103,9 @@ def assembly(output, cuda):
         ops = Counter(re.findall(r'/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)', section))
         for prefix in ['UTMALDG', 'UTMASTG', 'LDSM', 'STSM', 'QMMA.SF', 'USETMAXREG']:
             assert any(op.startswith(prefix) for op in ops), (name, prefix)
-        scaled = bool(re.search(r'ELb1ELb[01]E', name))
-        direct_ab = 'ELb1ELb1E' in name
+        flags = re.search(r'ELb([01])ELb([01])ELb([01])E', name)
+        assert flags, name
+        scaled, direct_ab, swap_ab = [v == '1' for v in flags.groups()]
         assert not any(op.startswith(('STG', 'LDL', 'STL', 'CALL')) for op in ops), name
         loads = list(re.finditer(r'\sLDG\.[^;]+;', section))
         if scaled:
@@ -120,7 +121,7 @@ def assembly(output, cuda):
         # output grouping requires register MOVs to form each K32 B operand.
         # This is a lexical def-use audit of the emitted unrolled instruction
         # sequence, not a general SASS control-flow analyzer.
-        definitions, qmma_count, direct_pairs = {}, 0, 0
+        definitions, qmma_count, direct_pairs, direct_a = {}, 0, 0, 0
         for line in section.splitlines():
             match = re.search(r'/\*([0-9a-f]+)\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)\s+([^;]+);', line)
             if not match:
@@ -131,8 +132,13 @@ def assembly(output, cuda):
                 b = int(operands[2].strip()[1:])
                 origins = [definitions.get(b), definitions.get(b+1)]
                 qmma_count += 1
-                if all(o and o[0] == 'LDSM' for o in origins) and origins[0][1] == origins[1][1]:
+                if all(o and o[0].startswith('LDSM') for o in origins) and origins[0][1] == origins[1][1]:
                     direct_pairs += 1
+                a = int(operands[1].strip()[1:])
+                origins_a = [definitions.get(a+i) for i in range(4)]
+                if (all(o and o[0] == 'LDSM.8.MT1616.2' for o in origins_a)
+                        and len({o[1] for o in origins_a}) == 1):
+                    direct_a += 1
             dest = operands[1].strip() if op.startswith('SHFL') else operands[0].strip()
             if re.fullmatch(r'R\d+', dest):
                 base = int(dest[1:])
@@ -140,13 +146,17 @@ def assembly(output, cuda):
                 count = (4 if op.startswith(('LDSM', 'QMMA')) or '.128' in op else
                          2 if '.64' in op or op.startswith(('IMAD.WIDE', 'LEA.WIDE')) else 1)
                 for i in range(count):
-                    definitions[base+i] = ('LDSM' if op.startswith('LDSM') else op, pc)
+                    definitions[base+i] = (op, pc)
         assert qmma_count > 0
         if not direct_ab:
             assert direct_pairs == qmma_count, (name, direct_pairs, qmma_count)
+        if swap_ab:
+            assert direct_a == qmma_count, (name, direct_a, qmma_count)
+            assert 'STSM.16.MT88.4' in ops, name
         result[name] = {'opcodes': dict(ops), 'qmma_instructions': qmma_count,
-                        'b_pairs_direct_from_ldsm': direct_pairs, 'direct_ab': direct_ab}
-    assert len(result) == 3*len(CONFIGS)-1  # C16 has no direct-AB variant.
+                        'b_pairs_direct_from_ldsm': direct_pairs, 'direct_ab': direct_ab,
+                        'a_quads_direct_from_transpose_ldsm': direct_a, 'swap_ab': swap_ab}
+    assert len(result) == 4*len(CONFIGS)-2  # C16 has no direct/swapped-AB variants.
     return result
 
 

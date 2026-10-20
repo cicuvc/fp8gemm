@@ -28,9 +28,10 @@ template<int R,int C,int BK,int Stages,bool DirectB=false> struct Config {
     static_assert(smem<=101376, "Configuration exceeds SM120 shared memory");
 };
 
-template<int R,int C,int BK,int Stages,bool HasWeightScale=false,bool DirectB=false>
+template<int R,int C,int BK,int Stages,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false>
 __global__ __launch_bounds__(384,1) void persistent_gemm(
     const __grid_constant__ typename Config<R,C,BK,Stages,DirectB>::Args args) {
+    static_assert(!SwapAB || (DirectB && HasWeightScale));
     using CF = Config<R,C,BK,Stages,DirectB>;
     using Shared = typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
@@ -88,7 +89,7 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
         kt::warpgroup::increase_registers<232>();
         bool writer = warp==0 && kt::warp::elect_leader();
         for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
-            kt::rt_fl<R,C> accum;
+            kt::rt_fl<SwapAB?C:R,SwapAB?R:C> accum;
             kt::warp::rt_maps::zero(accum);
             for(int k=0;k<args.ktiles;++k) {
                 auto packet = pipe.waitBuffer(2,shared.input);
@@ -114,7 +115,20 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
                 packet.submitToNextAndTrigger();
                 pipe.moveNext();
                 kt::online_quantize_mxfp8(aq,as,ar);
-                if constexpr(DirectB) kt::warp::wmma::mma_AB(accum,aq,br,accum,as,bs);
+                if constexpr(SwapAB) {
+                    // Native byte-transposing LDSM already has the four-word
+                    // A fragment order. Exchange logical base-tile indices only.
+                    kt::rt_fp8e4m3<C,BK> weights_a;
+#pragma unroll
+                    for(int n=0;n<C/16;++n)
+#pragma unroll
+                        for(int kk=0;kk<BK/32;++kk)
+#pragma unroll
+                            for(int p=0;p<4;++p)
+                                weights_a.tiles[n][kk].data[p]=br.tiles[kk][n].data[p];
+                    kt::warp::wmma::mma_ABt_block_scaled(accum,weights_a,aq,accum,bs,as);
+                }
+                else if constexpr(DirectB) kt::warp::wmma::mma_AB(accum,aq,br,accum,as,bs);
                 else kt::warp::wmma::mma_ABt_block_scaled(accum,aq,br,accum,as,bs);
             }
             // Each WG owns one output tile. Let its previous TMA store overlap
@@ -122,7 +136,19 @@ __global__ __launch_bounds__(384,1) void persistent_gemm(
             if(writer) kt::tma::store_async_read_wait<0>();
             kt::warpgroup::sync(group+1);
             // TK converts each FP32 pair to BF16 before stmatrix; never stores FP32.
-            kt::warpgroup::store(shared.output[group],accum);
+            if constexpr(SwapAB) {
+                // Reinterpret the logical transpose; conversion to BF16 and
+                // STSM.trans write the normal R x C result into shared memory.
+                kt::rt<float,R,C,kt::ducks::rt_layout::col> transposed;
+#pragma unroll
+                for(int m=0;m<R/16;++m)
+#pragma unroll
+                    for(int n=0;n<C/16;++n)
+#pragma unroll
+                        for(int p=0;p<4;++p)
+                            transposed.tiles[m][n].data[p]=accum.tiles[n][m].data[p];
+                kt::warpgroup::store(shared.output[group],transposed);
+            } else kt::warpgroup::store(shared.output[group],accum);
             asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
             kt::warpgroup::sync(group+1);
             if(writer) {
@@ -144,7 +170,7 @@ struct PlanBase {
     virtual void launch(cudaStream_t stream) = 0;
     virtual void info(int *data) = 0;
 };
-template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false> struct Plan final : PlanBase {
+template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false,bool SwapAB=false> struct Plan final : PlanBase {
     using CF=Config<R,C,BK,S,DirectB>;
     typename CF::Args args;
     int grid, regs;
@@ -159,8 +185,8 @@ template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false> 
         int dev; check(cudaGetDevice(&dev));
         cudaDeviceProp prop; check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0 ? std::min(sms,prop.multiProcessorCount) : prop.multiProcessorCount);
-        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale,DirectB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale,DirectB>));
+        check(cudaFuncSetAttribute(persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr; check(cudaFuncGetAttributes(&attr,persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB>));
         regs=attr.numRegs;
         // 256 consumers*232 + 128 producers*40 need 64512 registers.
         // ptxas accounts for setmaxnreg and supplies 168 initial registers/thread.
@@ -168,7 +194,7 @@ template<int R,int C,int BK,int S,bool HasWeightScale=false,bool DirectB=false> 
         if(attr.localSizeBytes) throw std::runtime_error("Kernel spills to local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_gemm<R,C,BK,S,HasWeightScale,DirectB><<<grid,384,CF::smem,stream>>>(args);
+        persistent_gemm<R,C,BK,S,HasWeightScale,DirectB,SwapAB><<<grid,384,CF::smem,stream>>>(args);
         check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
@@ -217,13 +243,14 @@ extern "C" void tk_gemm_destroy(void *plan) {delete static_cast<fp8gemm::PlanBas
 
 // Direct AB: A[M,K] may include zero-padded K columns, B[brows,N] retains
 // the forward weight orientation. TMA handles reduction-tail rows of B.
-extern "C" void *tk_gemm_create_ab(void *a,void *b,void *scales,void *out,
+template<bool SwapAB>
+static void *create_ab(void *a,void *b,void *scales,void *out,
     int m,int n,int k,int brows,int srows,int scols,int config,int sms) {
     using namespace fp8gemm;
     try {
         if(m<=0 || n<=0 || k<=0 || brows<=0 || brows>k || srows<=0 || scols<=0 || !a || !b || !scales || !out)
             throw std::runtime_error("Invalid direct AB dimensions/pointers");
-#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,true,true>(a,b,out,m,n,k,sms,static_cast<uint8_t*>(scales),brows,srows,scols)
+#define CFG(ID,R,C,BK,S) case ID:return new Plan<R,C,BK,S,true,true,SwapAB>(a,b,out,m,n,k,sms,static_cast<uint8_t*>(scales),brows,srows,scols)
         switch(config) {
             CFG(0,16,32,32,2);CFG(1,16,64,32,2);CFG(2,16,128,32,2);
             CFG(3,32,32,32,2);CFG(4,32,64,32,2);CFG(6,64,32,32,2);
@@ -232,4 +259,13 @@ extern "C" void *tk_gemm_create_ab(void *a,void *b,void *scales,void *out,
         }
 #undef CFG
     }catch(const std::exception &e){error=e.what();return nullptr;}
+}
+
+extern "C" void *tk_gemm_create_ab(void *a,void *b,void *scales,void *out,
+    int m,int n,int k,int brows,int srows,int scols,int config,int sms) {
+    return create_ab<false>(a,b,scales,out,m,n,k,brows,srows,scols,config,sms);
+}
+extern "C" void *tk_gemm_create_ab_swapped(void *a,void *b,void *scales,void *out,
+    int m,int n,int k,int brows,int srows,int scols,int config,int sms) {
+    return create_ab<true>(a,b,scales,out,m,n,k,brows,srows,scols,config,sms);
 }

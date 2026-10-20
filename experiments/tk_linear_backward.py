@@ -3,9 +3,10 @@
 The two GEMMs and layout/bias kernels are CUDA. The standalone transpose +
 row/K32 activation quantizer uses Triton, as selected by the prior benchmark.
 Forward weights retain their original 32x32 scales for dX. No input activation
-cache is required. dX reads the original weight orientation with a col-layout
-register tile. Only an incompatible weight row stride needs a non-transposing
-row-padding copy. All required preparation is included in each backward call.
+cache is required. dX uses swapAB: original weights are transposed by LDSM into
+the native A operand, while dY is quantized online as B. Only an incompatible
+weight row stride needs a non-transposing row-padding copy. All required
+preparation is included in each backward call.
 """
 import ctypes as ct
 from functools import lru_cache
@@ -74,9 +75,11 @@ class LinearBackwardPlan:
     block scales[ceil(N/32),ceil(K/32)]. Strided x/dy are accepted. SM120 only.
     Returns BF16 dX, FP32 dW, and FP32 db (empty when bias=False).
     transpose_weight=True retains the previous dX path for paired measurements.
+    swap_ab=False retains direct AB with FP8 W as B. By default swapAB is used
+    whenever transpose_weight=False; all three paths return the same layout.
     Keep the plan alive until its GPU work finishes, including graph replay.
     """
-    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None,*,transpose_weight=False):
+    def __init__(self,dy,x,w,ws,bias=True,dx_config=None,dw_config=None,*,transpose_weight=False,swap_ab=None):
         if x.ndim!=2 or dy.ndim!=2 or w.ndim!=2 or dy.shape[0]!=x.shape[0] or w.shape!=(dy.shape[1],x.shape[1]):
             raise ValueError('Expected x[M,K], dy[M,N], weight[N,K]')
         m,k=x.shape;n=dy.shape[1]
@@ -92,6 +95,9 @@ class LinearBackwardPlan:
         self.mp,self.np,self.kp=mp,np,kp=tuple((v+63)//64*64 for v in (m,n,k))
         self.bias=bool(bias)
         self.transpose_weight=transpose_weight
+        self.swap_ab=not transpose_weight if swap_ab is None else bool(swap_ab)
+        if transpose_weight and self.swap_ab:
+            raise ValueError('swapAB requires original weight orientation')
         def empty(shape,dtype):return torch.empty(shape,device=x.device,dtype=dtype)
         self.dyp=empty((m,np),torch.bfloat16)
         self.dyt=empty((np,mp),torch.bfloat16)
@@ -114,6 +120,12 @@ class LinearBackwardPlan:
         # Conservative defaults from the existing tile sweeps; no timing inside autograd.
         if dx_config is None:
             dx_config=7 if m<=256 else 8
+            if self.swap_ab:
+                # Both choices use R16/BK64; C64 creates twice as many CTAs
+                # when C128 cannot cover the device's SMs.
+                tasks_c128=((m+127)//128)*((self.dx_stride+127)//128)
+                sms=torch.cuda.get_device_properties(x.device).multi_processor_count
+                dx_config=7 if tasks_c128<sms else 8
             if not transpose_weight and self.dx_stride%GEMM_CONFIGS[dx_config][1]:
                 dx_config=7 if self.dx_stride%64==0 else 0
         dw_config=(0 if np<=256 and kp<=2048 else 3) if dw_config is None else dw_config
@@ -121,12 +133,12 @@ class LinearBackwardPlan:
         if transpose_weight:
             self.dx_plan=g.plan(self.dyp,self.wt,dx_config,out=self.dxp,scales=self.wst)
         else:
-            self.dx_plan=g.plan_ab(self.dyp,self.w_direct,ws,dx_config,out=self.dxp)
+            self.dx_plan=g.plan_ab(self.dyp,self.w_direct,ws,dx_config,out=self.dxp,swap_ab=self.swap_ab)
         self.dw_plan=d.plan(self.dyt,self.xq,dw_config,out=self.dwp,output_dtype=torch.float32,b_scales=self.xs)
         self.info={'shape_mnk':[m,n,k],'padded_mnk':[mp,np,kp], 'dx':self.dx_plan.info,'dw':self.dw_plan.info,
                    'bias':self.bias,'weight_transpose_each_call':transpose_weight,
                    'weight_row_padding':not transpose_weight and k!=self.dx_stride,
-                   'weight_row_stride':self.dx_stride}
+                   'weight_row_stride':self.dx_stride,'swap_ab':self.swap_ab}
 
     def prepare_dy(self):
         _check(self.lib.linear_prepare_dy(self.dy.data_ptr(),self.dyp.data_ptr(),self.dyt.data_ptr(),self.partial.data_ptr(),

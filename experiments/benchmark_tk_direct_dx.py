@@ -29,7 +29,7 @@ def main():
         dy=torch.randn((m,n),device='cuda',dtype=torch.bfloat16)
         w,ws=mxtest.launch_weight_quantize(torch.randn((n,k),device='cuda'))
         old=LinearBackwardPlan(dy,x,w,ws,transpose_weight=True)
-        new=LinearBackwardPlan(dy,x,w,ws)
+        new=LinearBackwardPlan(dy,x,w,ws,swap_ab=False)
         old();new()
         for a,b in zip((old.dx,old.dw,old.db),(new.dx,new.dw,new.db)):
             torch.testing.assert_close(a,b,rtol=0,atol=0)

@@ -39,12 +39,15 @@ class GemmLibrary:
         if hasattr(self.lib, 'tk_gemm_create_ab'):
             self.lib.tk_gemm_create_ab.argtypes = [ct.c_void_p]*4+[ct.c_int]*8
             self.lib.tk_gemm_create_ab.restype = ct.c_void_p
+        if hasattr(self.lib, 'tk_gemm_create_ab_swapped'):
+            self.lib.tk_gemm_create_ab_swapped.argtypes = [ct.c_void_p]*4+[ct.c_int]*8
+            self.lib.tk_gemm_create_ab_swapped.restype = ct.c_void_p
 
     def plan(self, a, b, config=8, out=None, sms=0, scales=None):
         return GemmPlan(self, a, b, config, out, sms, scales)
 
-    def plan_ab(self, a, b, scales, config=8, out=None, sms=0):
-        return GemmABPlan(self, a, b, scales, config, out, sms)
+    def plan_ab(self, a, b, scales, config=8, out=None, sms=0, *, swap_ab=False):
+        return GemmABPlan(self, a, b, scales, config, out, sms, swap_ab)
 
 
 class GemmABPlan:
@@ -55,8 +58,11 @@ class GemmABPlan:
     A's contiguous row width is a multiple64; B/output width must align to
     the selected shared swizzle panel (32/64/128 elements for C32/64/128).
     Scale rows/columns may cover less than padded B, with missing blocks zero.
+    swap_ab=True computes B^T @ A^T with FP8 weights as the native A operand;
+    BF16 conversion + transposing STSM + TMA still return output[M,N].
+    R/C in info always refer to the returned output; swapped accumulators are CxR.
     """
-    def __init__(self, owner, a, b, scales, config, out, sms):
+    def __init__(self, owner, a, b, scales, config, out, sms, swap_ab=False):
         self.handle=None
         if config not in [0,1,2,3,4,6,7,8,9] or a.ndim!=2 or b.ndim!=2:
             raise ValueError('Invalid AB configuration or shapes')
@@ -81,12 +87,16 @@ class GemmABPlan:
             raise ValueError('Output overlaps inputs')
         self.owner,self.a,self.b,self.scales,self.out=owner,a,b,scales,out
         with torch.cuda.device(a.device):
-            self.handle=owner.lib.tk_gemm_create_ab(a.data_ptr(),b.data_ptr(),scales.data_ptr(),out.data_ptr(),
+            create = owner.lib.tk_gemm_create_ab_swapped if swap_ab else owner.lib.tk_gemm_create_ab
+            self.handle=create(a.data_ptr(),b.data_ptr(),scales.data_ptr(),out.data_ptr(),
                 m,n,k,bk,*scales.shape,config,sms)
         if not self.handle:raise RuntimeError(owner.lib.tk_gemm_error().decode())
         info=(ct.c_int*7)();owner.lib.tk_gemm_info(self.handle,info)
         self.info=dict(zip(['R','C','BK','stages','shared_bytes','initial_regs','grid'],info))
         self.info['direct_b']=True
+        self.info['swap_ab']=bool(swap_ab)
+        self.info['accumulator_rows']=self.info['C'] if swap_ab else self.info['R']
+        self.info['accumulator_cols']=self.info['R'] if swap_ab else self.info['C']
 
     def __call__(self):
         with torch.cuda.device(self.a.device):

@@ -78,7 +78,8 @@ def test_stream_and_graph():
 
 
 @pytest.mark.parametrize('config',[0,1,2,3,4,6,7,8,9])
-def test_direct_ab_tma_tail(config):
+@pytest.mark.parametrize('swap_ab',[False,True])
+def test_direct_ab_tma_tail(config,swap_ab):
     m,n,k=257,97,256
     dc=exact_input(m,n,29)
     wc=exact_input(n,k,17).float()
@@ -88,8 +89,32 @@ def test_direct_ab_tma_tail(config):
     # B has exactly97 rows, not128. The K64 tile crosses its actual row bound.
     a=F.pad(dc,(0,128-n)).cuda()
     out=torch.full((m,k),float('nan'),device='cuda',dtype=torch.bfloat16)
-    p=GemmLibrary().plan_ab(a,w,ws,config,out=out,sms=3)
+    p=GemmLibrary().plan_ab(a,w,ws,config,out=out,sms=3,swap_ab=swap_ab)
     torch.testing.assert_close(p().cpu(),ref,rtol=0,atol=0)
+
+
+def test_swap_ab_persistent_reuse():
+    # Many K stages and output tasks per CTA exercise ring phases and overlap
+    # between transposed STSM output and the preceding task's TMA store.
+    m,n,k=1031,1057,256
+    dc=exact_input(m,n,29)
+    wc=exact_input(n,k,17).float()
+    w,ws=mxtest.launch_weight_quantize(wc.cuda())
+    wf=w.cpu().float()*torch.exp2(ws.cpu().float()-127).repeat_interleave(
+        32,0).repeat_interleave(32,1)[:n,:k]
+    a=F.pad(dc,(0,(-n)%64)).cuda()
+    out=torch.full((m,k),float('nan'),device='cuda',dtype=torch.bfloat16)
+    p=GemmLibrary().plan_ab(a,w,ws,8,out=out,sms=3,swap_ab=True)
+    ref=(quant_rows(dc).double() @ wf.double()).bfloat16()
+    torch.testing.assert_close(p().cpu(),ref,rtol=0,atol=0)
+    graph=torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):p()
+    w.view(torch.uint8).zero_()
+    graph.replay()
+    assert torch.count_nonzero(out).item()==0
+    w_new,ws_new=mxtest.launch_weight_quantize((wc*.5).cuda())
+    w.copy_(w_new);ws.copy_(ws_new)
+    torch.testing.assert_close(p().cpu(),ref*.5,rtol=0,atol=0)
 
 
 @pytest.mark.parametrize('k',[65,96,128,192])
