@@ -62,6 +62,8 @@ class MXFP8SwiGLULibrary:
             self.lib.tk_mx_swiglu_create_aux.restype = ct.c_void_p
         self.lib.tk_mx_swiglu_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         self.lib.tk_mx_swiglu_launch.restype = ct.c_int
+        self.lib.tk_mx_swiglu_rebind.argtypes = [ct.c_void_p] * 10
+        self.lib.tk_mx_swiglu_rebind.restype = ct.c_int
         self.lib.tk_mx_swiglu_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
         self.lib.tk_mx_swiglu_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_mx_swiglu_error.restype = ct.c_char_p
@@ -180,6 +182,12 @@ class MXFP8SwiGLUPlan:
         self.gate, self.gate_scale = gate, gate_scale
         self.up, self.up_scale, self.out = up, up_scale, out
         self.gate_out, self.up_out = gate_out, up_out
+        self.x_scale_shape = x_scale.shape
+        self.gate_scale_shape = gate_scale.shape
+        self.up_scale_shape = up_scale.shape
+        self.out_shape = out.shape
+        self.aux_shape = None if gate_out is None else gate_out.shape
+        self.has_aux = gate_out is not None
         with torch.cuda.device(x.device):
             create = (
                 owner.lib.tk_mx_swiglu_create
@@ -227,6 +235,86 @@ class MXFP8SwiGLUPlan:
         if status:
             raise RuntimeError(self.owner.lib.tk_mx_swiglu_error().decode())
         return self.out
+
+    def release(self):
+        self.refs = []
+        self.x = self.x_scale = None
+        self.gate = self.gate_scale = None
+        self.up = self.up_scale = self.out = None
+        self.gate_out = self.up_out = None
+
+    def rebind(
+        self,
+        x,
+        x_scale,
+        gate,
+        gate_scale,
+        up,
+        up_scale,
+        out=None,
+        gate_out=None,
+        up_out=None,
+    ):
+        if gate.shape != up.shape or gate.shape[1] != x.shape[1]:
+            raise ValueError("Expected X[M,K] and equal gate/up [N,K]")
+        if x.dtype != torch.float8_e4m3fn or gate.dtype != x.dtype or up.dtype != x.dtype:
+            raise ValueError("Expected E4M3 x, gate, and up")
+        if x_scale.shape != self.x_scale_shape or x_scale.dtype != torch.int32:
+            raise ValueError("Invalid packed X scales")
+        if gate_scale.shape != self.gate_scale_shape or gate_scale.dtype != torch.uint8:
+            raise ValueError("Invalid gate scales")
+        if up_scale.shape != self.up_scale_shape or up_scale.dtype != torch.uint8:
+            raise ValueError("Invalid up scales")
+        if out is None:
+            out = self.out
+        if out.shape != self.out_shape or out.dtype != torch.bfloat16:
+            raise ValueError("Invalid output buffer")
+        if (gate_out is None) != (up_out is None):
+            raise ValueError("gate_out and up_out must be supplied together")
+        if self.has_aux:
+            if gate_out is None:
+                gate_out, up_out = self.gate_out, self.up_out
+            if gate_out is None or up_out is None:
+                raise ValueError("Auxiliary outputs are required by this plan")
+            if (
+                gate_out.shape != self.aux_shape
+                or up_out.shape != self.aux_shape
+                or gate_out.dtype != torch.bfloat16
+                or up_out.dtype != torch.bfloat16
+            ):
+                raise ValueError("Invalid gate-half/up-linear output buffer")
+        elif gate_out is not None:
+            raise ValueError("This plan has no auxiliary outputs")
+        inputs = [x, x_scale, gate, gate_scale, up, up_scale]
+        outputs = [out, *([gate_out, up_out] if gate_out is not None else [])]
+        tensors = inputs + outputs
+        if any(
+            tensor.device != x.device or not tensor.is_contiguous()
+            for tensor in tensors
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        if any(tensor.data_ptr() % 16 for tensor in [x, gate, up, *outputs]):
+            raise ValueError("TMA tensor pointers must be 16-byte aligned")
+        self.refs = tensors
+        self.x, self.x_scale = x, x_scale
+        self.gate, self.gate_scale = gate, gate_scale
+        self.up, self.up_scale, self.out = up, up_scale, out
+        self.gate_out, self.up_out = gate_out, up_out
+        status = self.owner.lib.tk_mx_swiglu_rebind(
+            self.handle,
+            x.data_ptr(),
+            x_scale.data_ptr(),
+            gate.data_ptr(),
+            gate_scale.data_ptr(),
+            up.data_ptr(),
+            up_scale.data_ptr(),
+            out.data_ptr(),
+            gate_out.data_ptr() if gate_out is not None else 0,
+            up_out.data_ptr() if up_out is not None else 0,
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_mx_swiglu_error().decode())
+        return self
 
     def __del__(self):
         if getattr(self, "handle", None):

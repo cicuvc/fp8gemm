@@ -228,7 +228,13 @@ static void check(cudaError_t e) {
     if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));
 }
 
-struct PlanBase {virtual ~PlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
+struct PlanBase {
+    virtual ~PlanBase()=default;
+    virtual void launch(cudaStream_t)=0;
+    virtual void info(int*)=0;
+    virtual void rebind(
+        void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo)=0;
+};
 
 template<int R,int C,int BK,int S,bool Aux> struct Plan final:PlanBase {
     using CF=Config<R,C,BK,S,Aux>;
@@ -270,6 +276,20 @@ template<int R,int C,int BK,int S,bool Aux> struct Plan final:PlanBase {
     void info(int *d) override {
         d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;
         d[5]=regs;d[6]=grid;d[7]=args.raster_group;d[8]=Aux;d[9]=CF::output_buffers;
+    }
+    void rebind(
+        void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo) override {
+        args.a=Global<typename CF::ATile>((kt::fp8e4m3*)x,1,1,args.m,args.sc*32);
+        args.gate=Global<typename CF::BTile>((kt::fp8e4m3*)g,1,1,args.n,args.sc*32);
+        args.up=Global<typename CF::BTile>((kt::fp8e4m3*)u,1,1,args.n,args.sc*32);
+        args.out=Global<typename CF::OTile>((kt::bf16*)o,1,1,args.m,args.n);
+        args.gate_half=Global<typename CF::OTile>(
+            (kt::bf16*)(Aux?go:o),1,1,args.m,args.n);
+        args.up_linear=Global<typename CF::OTile>(
+            (kt::bf16*)(Aux?uo:o),1,1,args.m,args.n);
+        args.as=(uint32_t*)xs;
+        args.gs=(uint8_t*)gs;
+        args.us=(uint8_t*)us;
     }
 };
 
@@ -314,6 +334,12 @@ extern "C" void *tk_mx_swiglu_create_aux(
 }
 extern "C" int tk_mx_swiglu_launch(fp8gemm::mxswiglu::PlanBase *p,void*stream) {
     try {p->launch(static_cast<cudaStream_t>(stream));return 0;}
+    catch(const std::exception &e) {fp8gemm::mxswiglu::error=e.what();return -1;}
+}
+extern "C" int tk_mx_swiglu_rebind(
+    fp8gemm::mxswiglu::PlanBase *p,
+    void*x,void*xs,void*g,void*gs,void*u,void*us,void*o,void*go,void*uo) {
+    try {p->rebind(x,xs,g,gs,u,us,o,go,uo);return 0;}
     catch(const std::exception &e) {fp8gemm::mxswiglu::error=e.what();return -1;}
 }
 extern "C" void tk_mx_swiglu_info(fp8gemm::mxswiglu::PlanBase *p,int*out) {

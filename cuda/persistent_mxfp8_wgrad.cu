@@ -126,7 +126,12 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_wgrad(
     kt::warpgroup::sync(group+1);
 }
 void check(cudaError_t e) {if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));}
-struct PlanBase {virtual ~PlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
+struct PlanBase {
+    virtual ~PlanBase()=default;
+    virtual void launch(cudaStream_t)=0;
+    virtual void info(int*)=0;
+    virtual void rebind(void*a,void*b,void*as,void*bs,void*out)=0;
+};
 template<int R,int C,int BM,int S> struct Plan final:PlanBase {
     using CF=Config<R,C,BM,S>;typename CF::Args args;int grid,regs;
     Plan(void *a,void *b,void *as,void *bs,void *out,int n,int k,int m,int sms,int group):
@@ -150,6 +155,13 @@ template<int R,int C,int BM,int S> struct Plan final:PlanBase {
         persistent_mxfp8_wgrad<R,C,BM,S><<<grid,384,CF::smem,s>>>(args);check(cudaGetLastError());
     }
     void info(int *p) override {p[0]=R;p[1]=C;p[2]=BM;p[3]=S;p[4]=CF::smem;p[5]=regs;p[6]=grid;}
+    void rebind(void*a,void*b,void*as,void*bs,void*out) override {
+        args.a=Global<typename CF::A>((kt::fp8e4m3*)a,1,1,args.n,args.m);
+        args.b=Global<typename CF::B>((kt::fp8e4m3*)b,1,1,args.m,args.k);
+        args.out=Global<typename CF::O>((kt::bf16*)out,1,1,args.n,args.k);
+        args.as=(uint32_t*)as;
+        args.bs=(uint32_t*)bs;
+    }
 };
 static thread_local std::string error;
 }
@@ -170,6 +182,11 @@ extern "C" void *tk_mxw_create(void *a,void *b,void *as,void *bs,void *out,
 }
 extern "C" int tk_mxw_launch(fp8gemm::mxw::PlanBase *p,void *s) {
     try {p->launch((cudaStream_t)s);return 0;}
+    catch(const std::exception &e){fp8gemm::mxw::error=e.what();return -1;}
+}
+extern "C" int tk_mxw_rebind(fp8gemm::mxw::PlanBase *p,
+    void*a,void*b,void*as,void*bs,void*out) {
+    try {p->rebind(a,b,as,bs,out);return 0;}
     catch(const std::exception &e){fp8gemm::mxw::error=e.what();return -1;}
 }
 extern "C" void tk_mxw_info(fp8gemm::mxw::PlanBase *p,int *d){p->info(d);}

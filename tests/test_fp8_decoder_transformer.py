@@ -104,6 +104,64 @@ def test_variable_sequence_boundaries():
     assert torch.isfinite(logits).all()
 
 
+def test_repeated_steps_reuse_plans_and_remain_finite():
+    torch.manual_seed(204)
+    model = FP8DecoderTransformer(
+        vocab_size=257,
+        d_model=64,
+        n_layers=2,
+        n_heads=4,
+        mlp_hidden=128,
+        context_length=32,
+        device="cuda",
+        qkv_forward_config=0,
+        qkv_dx_config=0,
+        qkv_dw_config=0,
+        swiglu_forward_config=1,
+        swiglu_dx_config=5,
+        swiglu_dw_config=0,
+        down_forward_config=0,
+        down_dx_config=2,
+        down_dw_config=0,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    model.bind_optimizer(optimizer)
+    cu_seqlens = torch.tensor([0, 8, 15], device="cuda", dtype=torch.int32)
+    cached_plan_ids = []
+
+    for _ in range(3):
+        tokens = torch.randint(1, 257, (15,), device="cuda")
+        loss = model.forward_loss(
+            tokens,
+            tokens.clone(),
+            cu_seqlens,
+            8,
+            num_chunks=2,
+        )
+        loss.backward()
+        assert torch.isfinite(loss)
+        assert all(
+            parameter.grad is None or torch.isfinite(parameter.grad).all()
+            for parameter in model.parameters()
+        )
+        step_plan_ids = []
+        for block in model.blocks:
+            states = [
+                block.attention._forward_states,
+                block.attention._backward_states,
+                block.mlp._forward_states,
+                block.mlp._backward_states,
+                block.mlp.down_proj._forward_states,
+                block.mlp.down_proj._backward_states,
+            ]
+            assert all(len(cache) == 1 for cache in states)
+            step_plan_ids.extend(id(next(iter(cache.values()))) for cache in states)
+        cached_plan_ids.append(step_plan_ids)
+        optimizer.step()
+
+    assert cached_plan_ids[0] == cached_plan_ids[1] == cached_plan_ids[2]
+
+
 def test_fla_rope_matches_interleaved_reference():
     torch.manual_seed(205)
     tokens, heads, head_dim = 15, 4, 16

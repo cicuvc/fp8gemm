@@ -213,6 +213,10 @@ struct PlanBase {
     virtual ~PlanBase()=default;
     virtual void launch(cudaStream_t)=0;
     virtual void info(int*)=0;
+    virtual void rebind(
+        void*gate,void*up,void*weight_gate,void*weight_up,
+        void*gate_scale,void*up_scale,
+        void*weight_gate_scale,void*weight_up_scale,void*out)=0;
 };
 
 template<int R,int C,int BN,int S> struct Plan final:PlanBase {
@@ -262,6 +266,22 @@ template<int R,int C,int BN,int S> struct Plan final:PlanBase {
         out[0]=R;out[1]=C;out[2]=BN;out[3]=S;
         out[4]=CF::smem;out[5]=regs;out[6]=grid;out[7]=args.group;
     }
+    void rebind(
+        void*gate,void*up,void*weight_gate,void*weight_up,
+        void*gate_scale,void*up_scale,
+        void*weight_gate_scale,void*weight_up_scale,void*out) override {
+        args.gate=Global<typename CF::A>((kt::fp8e4m3*)gate,1,1,args.m,args.n);
+        args.up=Global<typename CF::A>((kt::fp8e4m3*)up,1,1,args.m,args.n);
+        args.weight_gate=Global<typename CF::B>(
+            (kt::fp8e4m3*)weight_gate,1,1,args.n,args.k);
+        args.weight_up=Global<typename CF::B>(
+            (kt::fp8e4m3*)weight_up,1,1,args.n,args.k);
+        args.out=Global<typename CF::O>((kt::bf16*)out,1,1,args.m,args.k);
+        args.gate_scale=(uint32_t*)gate_scale;
+        args.up_scale=(uint32_t*)up_scale;
+        args.weight_gate_scale=(uint8_t*)weight_gate_scale;
+        args.weight_up_scale=(uint8_t*)weight_up_scale;
+    }
 };
 
 static thread_local std::string error;
@@ -294,6 +314,20 @@ extern "C" void *tk_swd_create(
 extern "C" int tk_swd_launch(fp8gemm::mxswd::PlanBase *plan,void*stream) {
     try {
         plan->launch(static_cast<cudaStream_t>(stream));
+        return 0;
+    }catch(const std::exception &exception) {
+        fp8gemm::mxswd::error=exception.what();return -1;
+    }
+}
+extern "C" int tk_swd_rebind(
+    fp8gemm::mxswd::PlanBase *plan,
+    void*gate,void*up,void*weight_gate,void*weight_up,
+    void*gate_scale,void*up_scale,
+    void*weight_gate_scale,void*weight_up_scale,void*out) {
+    try {
+        plan->rebind(
+            gate,up,weight_gate,weight_up,
+            gate_scale,up_scale,weight_gate_scale,weight_up_scale,out);
         return 0;
     }catch(const std::exception &exception) {
         fp8gemm::mxswd::error=exception.what();return -1;

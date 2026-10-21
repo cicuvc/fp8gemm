@@ -36,6 +36,8 @@ class Library:
             self.lib.tk_mx_create_quantized.restype=ct.c_void_p
         self.lib.tk_mx_error.restype=ct.c_char_p
         self.lib.tk_mx_launch.argtypes=[ct.c_void_p,ct.c_void_p]
+        self.lib.tk_mx_rebind.argtypes=[ct.c_void_p]*8
+        self.lib.tk_mx_rebind.restype=ct.c_int
         self.lib.tk_mx_info.argtypes=[ct.c_void_p,ct.POINTER(ct.c_int)]
         self.lib.tk_mx_destroy.argtypes=[ct.c_void_p]
     def plan(self,a,b,as_,bs,config=8,out=None,sms=0,raster_group=1,
@@ -90,6 +92,12 @@ class Plan:
         self.owner=owner;self.refs=tensors;self.out=out
         self.qout=qout;self.qscales=qscales
         self.result=out if save_bf16 else qout
+        self.has_bf16=out is not None
+        self.has_quantized=qout is not None
+        self.as_shape=as_.shape;self.bs_shape=bs.shape
+        self.out_shape=None if out is None else out.shape
+        self.qout_shape=None if qout is None else qout.shape
+        self.qscales_shape=None if qscales is None else qscales.shape
         with torch.cuda.device(a.device):
             create=owner.lib.tk_mx_create_quantized if save_quantized else owner.lib.tk_mx_create
             pointers=[t.data_ptr() for t in [a,b,as_,bs]]+[out.data_ptr() if out is not None else 0]
@@ -104,5 +112,58 @@ class Plan:
             if self.owner.lib.tk_mx_launch(self.handle,torch.cuda.current_stream(self.result.device).cuda_stream):
                 raise RuntimeError(self.owner.lib.tk_mx_error().decode())
         return self.result
+    def release(self):
+        self.refs=[]
+        self.out=None
+        self.qout=None
+        self.qscales=None
+        self.result=None
+    def rebind(self,a,b,as_,bs,out=None,quantized_out=None,quantized_scales=None):
+        m,k=a.shape;n=b.shape[0]
+        if a.shape!=(m,k) or b.shape[1]!=k:
+            raise ValueError('Invalid rebind matrix shapes')
+        if a.dtype!=torch.float8_e4m3fn or b.dtype!=a.dtype:
+            raise ValueError('Expected E4M3 operands')
+        if as_.shape!=self.as_shape or as_.dtype!=torch.int32:
+            raise ValueError('Invalid packed A scales')
+        if bs.shape!=self.bs_shape or bs.dtype!=torch.uint8:
+            raise ValueError('Invalid B scales')
+        if out is None:
+            out=self.out
+        if self.has_bf16:
+            if out is None or out.shape!=self.out_shape or out.dtype!=torch.bfloat16:
+                raise ValueError('Invalid BF16 output')
+        elif out is not None:
+            raise ValueError('This plan has no BF16 output')
+        if quantized_out is None:
+            quantized_out=self.qout
+        if quantized_scales is None:
+            quantized_scales=self.qscales
+        if self.has_quantized:
+            if (quantized_out is None or quantized_out.shape!=self.qout_shape
+                    or quantized_out.dtype!=a.dtype):
+                raise ValueError('Invalid quantized output')
+            if (quantized_scales is None
+                    or quantized_scales.shape!=self.qscales_shape
+                    or quantized_scales.dtype!=torch.int32):
+                raise ValueError('Invalid quantized scales')
+        tensors=[a,b,as_,bs]+([out] if out is not None else [])+(
+            [quantized_out,quantized_scales] if quantized_out is not None else [])
+        if any(t.device!=a.device or not t.is_contiguous() for t in tensors):
+            raise ValueError('Expected contiguous tensors on one CUDA device')
+        if any(t.data_ptr()%16 for t in [a,b,as_,out,quantized_out,quantized_scales] if t is not None):
+            raise ValueError('Unaligned output/TMA pointer')
+        self.refs=tensors
+        status=self.owner.lib.tk_mx_rebind(
+            self.handle,a.data_ptr(),b.data_ptr(),as_.data_ptr(),bs.data_ptr(),
+            out.data_ptr() if out is not None else 0,
+            quantized_out.data_ptr() if quantized_out is not None else 0,
+            quantized_scales.data_ptr() if quantized_scales is not None else 0,
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_mx_error().decode())
+        self.out=out;self.qout=quantized_out;self.qscales=quantized_scales
+        self.result=out if out is not None else quantized_out
+        return self
     def __del__(self):
         if self.handle:self.owner.lib.tk_mx_destroy(self.handle)

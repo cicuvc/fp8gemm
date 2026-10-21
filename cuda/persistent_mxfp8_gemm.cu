@@ -200,7 +200,12 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
     kt::warpgroup::sync(group+1);
 }
 static void mx_check(cudaError_t e){if(e!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(e));}
-struct MXPlanBase {virtual ~MXPlanBase()=default;virtual void launch(cudaStream_t)=0;virtual void info(int*)=0;};
+struct MXPlanBase {
+    virtual ~MXPlanBase()=default;
+    virtual void launch(cudaStream_t)=0;
+    virtual void info(int*)=0;
+    virtual void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs)=0;
+};
 template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false> struct MXPlan:MXPlanBase {
     using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ>;typename CF::Args args;int grid,regs;
     static auto bf16_args(void *o,int m,int n) {
@@ -240,6 +245,14 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false> struct MXPl
         persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
+    void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs) override {
+        args.a=MXGlobal<typename CF::ATile>((kt::fp8e4m3*)a,1,1,args.m,args.sc*32);
+        args.b=MXGlobal<typename CF::BTile>((kt::fp8e4m3*)b,1,1,args.n,args.sc*32);
+        args.out=bf16_args(o,args.m,args.n);
+        args.as=(uint32_t*)as;
+        args.bs=(uint8_t*)bs;
+        args.q=quantized_args(q,qs,args.m,args.n);
+    }
 };
 static thread_local std::string mx_error;
 }
@@ -258,6 +271,11 @@ extern "C" void *tk_mx_create(void *a,void *b,void *as,void *bs,void *o,int m,in
 }
 extern "C" int tk_mx_launch(fp8gemm::MXPlanBase *p,void *s){
     try{p->launch((cudaStream_t)s);return 0;}catch(const std::exception &e){fp8gemm::mx_error=e.what();return -1;}
+}
+extern "C" int tk_mx_rebind(fp8gemm::MXPlanBase *p,
+    void*a,void*b,void*as,void*bs,void*o,void*q,void*qs) {
+    try{p->rebind(a,b,as,bs,o,q,qs);return 0;}
+    catch(const std::exception &e){fp8gemm::mx_error=e.what();return -1;}
 }
 extern "C" void *tk_mx_create_quantized(void *a,void *b,void *as,void *bs,void *o,
     void *q,void *qs,int m,int n,int k,int config,int sms,int g) {

@@ -31,6 +31,8 @@ class Library:
         self.lib.tk_mxw_create.argtypes=[ct.c_void_p]*5+[ct.c_int]*6
         self.lib.tk_mxw_create.restype=ct.c_void_p
         self.lib.tk_mxw_launch.argtypes=[ct.c_void_p,ct.c_void_p]
+        self.lib.tk_mxw_rebind.argtypes=[ct.c_void_p]*6
+        self.lib.tk_mxw_rebind.restype=ct.c_int
         self.lib.tk_mxw_error.restype=ct.c_char_p
         self.lib.tk_mxw_info.argtypes=[ct.c_void_p,ct.POINTER(ct.c_int)]
         self.lib.tk_mxw_destroy.argtypes=[ct.c_void_p]
@@ -71,6 +73,7 @@ class Plan:
         if any(lo<t.data_ptr()+t.numel()*t.element_size() and t.data_ptr()<hi for t in tensors[:4]):
             raise ValueError('Output aliases an input')
         self.owner=owner;self.refs=tensors;self.out=out
+        self.as_shape=as_.shape;self.bs_shape=bs.shape;self.out_shape=out.shape
         with torch.cuda.device(a.device):
             self.handle=owner.lib.tk_mxw_create(*[t.data_ptr() for t in tensors],n,k,m,config,sms,group)
         if not self.handle:raise RuntimeError(owner.lib.tk_mxw_error().decode())
@@ -84,6 +87,38 @@ class Plan:
             if self.owner.lib.tk_mxw_launch(self.handle,torch.cuda.current_stream(self.out.device).cuda_stream):
                 raise RuntimeError(self.owner.lib.tk_mxw_error().decode())
         return self.out
+
+    def release(self):
+        self.refs=[]
+        self.out=None
+
+    def rebind(self,a,b,as_,bs,out=None):
+        n,m=a.shape;k=b.shape[1]
+        if b.shape[0]!=m:
+            raise ValueError('Expected A[N,M] and B[M,K]')
+        if a.dtype!=torch.float8_e4m3fn or b.dtype!=a.dtype:
+            raise ValueError('Expected E4M3 operands')
+        if as_.shape!=self.as_shape or as_.dtype!=torch.int32:
+            raise ValueError('Invalid packed A scales')
+        if bs.shape!=self.bs_shape or bs.dtype!=torch.int32:
+            raise ValueError('Invalid packed B scales')
+        if out is None:
+            out=self.out
+        if out.shape!=self.out_shape or out.dtype!=torch.bfloat16:
+            raise ValueError('Expected BF16 output [N,K]')
+        tensors=[a,b,as_,bs,out]
+        if any(t.device!=a.device or not t.is_contiguous() for t in tensors):
+            raise ValueError('Expected contiguous tensors on one CUDA device')
+        if any(t.data_ptr()%16 for t in tensors):
+            raise ValueError('Unaligned buffer')
+        self.refs=tensors;self.out=out
+        status=self.owner.lib.tk_mxw_rebind(
+            self.handle,a.data_ptr(),b.data_ptr(),as_.data_ptr(),
+            bs.data_ptr(),out.data_ptr(),
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_mxw_error().decode())
+        return self
 
     def __del__(self):
         if self.handle:self.owner.lib.tk_mxw_destroy(self.handle)

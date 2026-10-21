@@ -205,6 +205,22 @@ class RMSNormDualQuantPlan:
             dtype=torch.int32,
         )
 
+    def rebind(self, x, factor):
+        if x.shape != (self.m, self.k) or x.dtype != torch.bfloat16:
+            raise ValueError("Expected BF16 X with the plan shape")
+        if factor.shape != self.factor.shape or factor.dtype != self.factor.dtype:
+            raise ValueError("Expected factor with the plan shape and dtype")
+        if (
+            not x.is_cuda
+            or not x.is_contiguous()
+            or x.device != self.inverse_rms.device
+            or factor.device != x.device
+            or not factor.is_contiguous()
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        self.x, self.factor = x, factor
+        return self
+
     def __call__(self):
         _inverse_rms[(self.m,)](
             self.x,
@@ -381,8 +397,11 @@ class RMSNormBackwardPlan:
         ):
             raise ValueError("Expected all tensors on one CUDA device")
         self.dy, self.x, self.factor = dy, x, factor
+        self.factor_shape, self.factor_dtype = factor.shape, factor.dtype
         self.inverse_rms = inverse_rms
+        self.inverse_shape = inverse_rms.shape
         self.m, self.k = x.shape
+        self.device = x.device
         self.row_blocks = (self.m + 31) // 32
         self.dx = torch.empty_like(x)
         self.dot = torch.empty(self.m, device=x.device, dtype=torch.float32)
@@ -390,6 +409,44 @@ class RMSNormBackwardPlan:
         self.factor_partial = torch.empty(
             (self.row_blocks, self.k), device=x.device, dtype=torch.float32
         )
+
+    def rebind(self, dy, x, factor, inverse_rms):
+        if (
+            dy.shape != (self.m, self.k)
+            or x.shape != (self.m, self.k)
+            or dy.dtype != torch.bfloat16
+            or x.dtype != torch.bfloat16
+            or factor.shape != self.factor_shape
+            or factor.dtype != self.factor_dtype
+            or inverse_rms.shape != self.inverse_shape
+            or inverse_rms.dtype != torch.float32
+        ):
+            raise ValueError("Invalid RMSNorm backward rebind tensors")
+        if any(
+            tensor.device != self.dx.device or not tensor.is_contiguous()
+            for tensor in [dy, x, factor, inverse_rms]
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        self.dy, self.x, self.factor = dy, x, factor
+        self.inverse_rms = inverse_rms
+        return self
+
+    def allocate_workspace(self):
+        self.dot = torch.empty(self.m, device=self.device, dtype=torch.float32)
+        self.dx = torch.empty(
+            (self.m, self.k), device=self.device, dtype=torch.bfloat16
+        )
+        self.factor_grad = torch.empty(
+            self.k, device=self.device, dtype=torch.float32
+        )
+        self.factor_partial = torch.empty(
+            (self.row_blocks, self.k), device=self.device, dtype=torch.float32
+        )
+        return self
+
+    def release_workspace(self):
+        self.dy = self.x = self.factor = self.inverse_rms = None
+        self.dx = self.dot = self.factor_grad = self.factor_partial = None
 
     def __call__(self):
         _rmsnorm_dot[(self.m,)](
@@ -644,6 +701,30 @@ class FusedAddRMSNormPlan:
             self.row_fp8 = self.row_scale = None
             self.column_fp8 = self.column_scale = None
 
+    def rebind(self, x, residual, factor=None):
+        if (
+            x.shape != (self.m, self.k)
+            or residual.shape != x.shape
+            or x.dtype != torch.bfloat16
+            or residual.dtype != torch.bfloat16
+        ):
+            raise ValueError("Expected equal BF16 X and residual with the plan shape")
+        if (factor is None) != (self.factor is None):
+            raise ValueError("Factor presence must match the plan")
+        if factor is not None and (
+            factor.shape != self.factor.shape
+            or factor.dtype != self.factor.dtype
+        ):
+            raise ValueError("Factor shape or dtype changed")
+        tensors = [x, residual] + ([factor] if factor is not None else [])
+        if any(
+            tensor.device != self.inverse_rms.device or not tensor.is_contiguous()
+            for tensor in tensors
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        self.x, self.residual, self.factor = x, residual, factor
+        return self
+
     def __call__(self):
         sum_ptr = self.sum_out if self.sum_out is not None else self.x
         _inverse_rms_add[(self.m,)](
@@ -892,6 +973,11 @@ class FusedAddRMSNormBackwardPlan:
         self.dy, self.x, self.residual = dy, x, residual
         self.factor, self.inverse_rms, self.dsum = factor, inverse_rms, dsum
         self.m, self.k = x.shape
+        self.device = x.device
+        self.has_factor = factor is not None
+        self.factor_shape = None if factor is None else factor.shape
+        self.factor_dtype = None if factor is None else factor.dtype
+        self.inverse_shape = inverse_rms.shape
         self.row_blocks = (self.m + 31) // 32
         self.dot = torch.empty(self.m, device=x.device, dtype=torch.float32)
         self.dx = torch.empty_like(x)
@@ -910,6 +996,67 @@ class FusedAddRMSNormBackwardPlan:
             if factor is not None
             else None
         )
+
+    def rebind(self, dy, x, residual, factor, inverse_rms, *, dsum=None):
+        if (
+            dy.shape != (self.m, self.k)
+            or x.shape != (self.m, self.k)
+            or residual.shape != (self.m, self.k)
+            or dy.dtype != torch.bfloat16
+            or x.dtype != torch.bfloat16
+            or residual.dtype != torch.bfloat16
+            or inverse_rms.shape != self.inverse_shape
+            or inverse_rms.dtype != torch.float32
+        ):
+            raise ValueError("Invalid fused RMSNorm backward rebind tensors")
+        if (factor is None) == self.has_factor:
+            raise ValueError("Factor presence must match the plan")
+        if factor is not None and (
+            factor.shape != self.factor_shape or factor.dtype != self.factor_dtype
+        ):
+            raise ValueError("Factor shape or dtype changed")
+        if dsum is not None and (
+            dsum.shape != x.shape
+            or dsum.dtype != torch.bfloat16
+            or not dsum.is_contiguous()
+        ):
+            raise ValueError("Expected contiguous BF16 dsum[M,K]")
+        tensors = [dy, x, residual] + (
+            [factor] if factor is not None else []
+        ) + ([dsum] if dsum is not None else []) + [inverse_rms]
+        if any(
+            tensor.device != self.dx.device or not tensor.is_contiguous()
+            for tensor in tensors
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        self.dy, self.x, self.residual = dy, x, residual
+        self.factor, self.inverse_rms, self.dsum = factor, inverse_rms, dsum
+        return self
+
+    def allocate_workspace(self):
+        device = self.device
+        self.dot = torch.empty(self.m, device=device, dtype=torch.float32)
+        self.dx = torch.empty(
+            (self.m, self.k), device=device, dtype=torch.bfloat16
+        )
+        self.dresidual = self.dx
+        self.factor_grad = (
+            torch.empty(self.k, device=device, dtype=torch.bfloat16)
+            if self.has_factor
+            else None
+        )
+        self.factor_partial = (
+            torch.empty((self.row_blocks, self.k), device=device, dtype=torch.float32)
+            if self.has_factor
+            else None
+        )
+        return self
+
+    def release_workspace(self):
+        self.dy = self.x = self.residual = None
+        self.factor = self.inverse_rms = self.dsum = None
+        self.dot = self.dx = self.dresidual = None
+        self.factor_grad = self.factor_partial = None
 
     def __call__(self):
         factor = self.factor if self.factor is not None else self.x

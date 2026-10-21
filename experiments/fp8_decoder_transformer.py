@@ -146,12 +146,194 @@ class _QKVForwardState:
             raster_group=raster_group,
         )
 
-    def __call__(self):
-        residual_out = self.x
+    def __call__(self, x, residual_delta, factor, weights, scales):
+        if residual_delta is None:
+            self.norm.rebind(x, factor)
+        else:
+            self.norm.rebind(x, residual_delta, factor)
+        self.q.rebind(self.norm.row_fp8, weights[0], self.norm.row_scale, scales[0])
+        self.k.rebind(self.norm.row_fp8, weights[1], self.norm.row_scale, scales[1])
+        self.v.rebind(self.norm.row_fp8, weights[2], self.norm.row_scale, scales[2])
+        residual_out = x
         self.norm()
-        if self.residual_delta is not None:
+        if residual_delta is not None:
             residual_out = self.norm.sum_out
         return self.q(), self.k(), self.v(), residual_out
+
+
+class _QKVBackwardState:
+    def __init__(
+        self,
+        dq,
+        dk,
+        dv,
+        x,
+        residual_delta,
+        factor,
+        q_fp8,
+        q_scale,
+        k_fp8,
+        k_scale,
+        v_fp8,
+        v_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+        *,
+        dx_config,
+        dw_config,
+        raster_group,
+    ):
+        self.quantizers = [
+            SiluBwdQuantizeLibrary().plan_direct(dy, transpose=True)
+            for dy in [dq, dk, dv]
+        ]
+        self.pair_dx = SwiGLUDgradLibrary().plan(
+            self.quantizers[0].row_fp8,
+            self.quantizers[1].row_fp8,
+            q_fp8,
+            k_fp8,
+            self.quantizers[0].row_scale,
+            self.quantizers[1].row_scale,
+            q_scale,
+            k_scale,
+            config=dx_config,
+            raster_group=raster_group,
+        )
+        self.v_dx = DgradLibrary().plan(
+            self.quantizers[2].row_fp8,
+            v_fp8,
+            self.quantizers[2].row_scale,
+            v_scale,
+            config=dx_config,
+            raster_group=raster_group,
+        )
+        wgrad_library = WgradLibrary()
+        self.weight_grads = [
+            wgrad_library.plan(
+                quantize.column_fp8,
+                x_column,
+                quantize.column_scale,
+                x_column_scale,
+                config=dw_config,
+                raster_group=raster_group,
+            )
+            for quantize in self.quantizers
+        ]
+        self.dx_norm = torch.empty_like(x)
+        self.dx_final = torch.empty_like(x)
+        if residual_delta is None:
+            self.norm_backward = RMSNormBackwardPlan(
+                self.dx_norm, x, factor, inverse_rms
+            )
+        else:
+            self.norm_backward = FusedAddRMSNormBackwardPlan(
+                self.dx_norm,
+                x,
+                residual_delta,
+                factor,
+                inverse_rms,
+            )
+        self.fused_residual = residual_delta is not None
+
+    def __call__(
+        self,
+        dq,
+        dk,
+        dv,
+        x,
+        residual_delta,
+        factor,
+        q_fp8,
+        q_scale,
+        k_fp8,
+        k_scale,
+        v_fp8,
+        v_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+        dresidual_out,
+    ):
+        dx_shape = (x.shape[0], x.shape[1])
+        weight_grad_shape = (x.shape[1], x.shape[1])
+        for quantize, dy in zip(self.quantizers, [dq, dk, dv]):
+            quantize.reallocate_outputs()
+            quantize.rebind(dy)
+        self.pair_dx.rebind(
+            self.quantizers[0].row_fp8,
+            self.quantizers[1].row_fp8,
+            q_fp8,
+            k_fp8,
+            self.quantizers[0].row_scale,
+            self.quantizers[1].row_scale,
+            q_scale,
+            k_scale,
+            out=torch.empty(
+                dx_shape, device=x.device, dtype=torch.bfloat16
+            ),
+        )
+        self.v_dx.rebind(
+            self.quantizers[2].row_fp8,
+            v_fp8,
+            self.quantizers[2].row_scale,
+            v_scale,
+            out=torch.empty(
+                dx_shape, device=x.device, dtype=torch.bfloat16
+            ),
+        )
+        for plan, quantize in zip(self.weight_grads, self.quantizers):
+            plan.rebind(
+                quantize.column_fp8,
+                x_column,
+                quantize.column_scale,
+                x_column_scale,
+                out=torch.empty(
+                    weight_grad_shape, device=x.device, dtype=torch.bfloat16
+                ),
+            )
+        self.dx_norm = torch.empty(
+            dx_shape, device=x.device, dtype=torch.bfloat16
+        )
+        self.dx_final = torch.empty_like(self.dx_norm)
+        for quantize in self.quantizers:
+            quantize()
+        torch.add(self.pair_dx(), self.v_dx(), out=self.dx_norm)
+        weight_grads = [plan() for plan in self.weight_grads]
+        if self.fused_residual:
+            self.norm_backward.allocate_workspace()
+            self.norm_backward.rebind(
+                self.dx_norm,
+                x,
+                residual_delta,
+                factor,
+                inverse_rms,
+                dsum=dresidual_out,
+            )
+            dx, dresidual_delta, factor_grad = self.norm_backward()
+        else:
+            self.norm_backward.allocate_workspace()
+            self.norm_backward.rebind(
+                self.dx_norm, x, factor, inverse_rms
+            )
+            dx, factor_grad = self.norm_backward()
+            if dresidual_out is None:
+                dresidual_delta = None
+            else:
+                torch.add(dx, dresidual_out, out=self.dx_final)
+                dx = self.dx_final
+                dresidual_delta = None
+        factor_grad = factor_grad.bfloat16()
+        result = dx, dresidual_delta, factor_grad, weight_grads
+        for quantize in self.quantizers:
+            quantize.release()
+        self.pair_dx.release()
+        self.v_dx.release()
+        for plan in self.weight_grads:
+            plan.release()
+        self.norm_backward.release_workspace()
+        self.dx_norm = self.dx_final = None
+        return result
 
 
 class _PrenormQKV(torch.autograd.Function):
@@ -159,7 +341,13 @@ class _PrenormQKV(torch.autograd.Function):
     def forward(ctx, x, residual_delta, factor, qw, kw, vw, module):
         module._sync_if_needed()
         state = module._forward_state(x, residual_delta, factor)
-        q, k, v, residual_out = state()
+        q, k, v, residual_out = state(
+            x,
+            residual_delta,
+            factor,
+            (module._q_fp8, module._k_fp8, module._v_fp8),
+            (module._q_scale, module._k_scale, module._v_scale),
+        )
         ctx.module = module
         ctx.residual_delta = residual_delta
         ctx.save_for_backward(
@@ -199,72 +387,48 @@ class _PrenormQKV(torch.autograd.Function):
             inverse_rms,
         ) = ctx.saved_tensors
         module = ctx.module
-        quantizers = []
-        weight_grads = []
-        for dy in [dq, dk, dv]:
-            dy = dy.contiguous().to(torch.bfloat16)
-            quantizers.append(
-                SiluBwdQuantizeLibrary().plan_direct(dy, transpose=True)
-            )
-        pair_dx = SwiGLUDgradLibrary().plan(
-            quantizers[0].row_fp8,
-            quantizers[1].row_fp8,
+        dq, dk, dv = [
+            dy.contiguous().to(torch.bfloat16) for dy in [dq, dk, dv]
+        ]
+        state = module._backward_state(
+            dq,
+            dk,
+            dv,
+            x,
+            ctx.residual_delta,
+            factor,
             q_fp8,
-            k_fp8,
-            quantizers[0].row_scale,
-            quantizers[1].row_scale,
             q_scale,
+            k_fp8,
             k_scale,
-            config=module.dx_config,
-            raster_group=module.raster_group,
-        )
-        v_dx = DgradLibrary().plan(
-            quantizers[2].row_fp8,
             v_fp8,
-            quantizers[2].row_scale,
             v_scale,
-            config=module.dx_config,
-            raster_group=module.raster_group,
+            x_column,
+            x_column_scale,
+            inverse_rms,
         )
-        for quantize, weight_scale in [
-            (quantizers[0], q_scale),
-            (quantizers[1], k_scale),
-            (quantizers[2], v_scale),
-        ]:
-            weight_grads.append(
-                WgradLibrary().plan(
-                    quantize.column_fp8,
-                    x_column,
-                    quantize.column_scale,
-                    x_column_scale,
-                    config=module.dw_config,
-                    raster_group=module.raster_group,
-                )
-            )
-        for quantize in quantizers:
-            quantize()
-        dx_norm = torch.add(pair_dx(), v_dx())
-        weight_grads = [plan() for plan in weight_grads]
-        if ctx.residual_delta is None:
-            norm_backward = RMSNormBackwardPlan(dx_norm, x, factor, inverse_rms)
-            dx, factor_grad = norm_backward()
-            if dresidual_out is not None:
-                dx = torch.add(dx, dresidual_out)
-            dresidual_delta = None
-        else:
-            norm_backward = FusedAddRMSNormBackwardPlan(
-                dx_norm,
-                x,
-                ctx.residual_delta,
-                factor,
-                inverse_rms,
-                dsum=dresidual_out,
-            )
-            dx, dresidual_delta, factor_grad = norm_backward()
+        dx, dresidual_delta, factor_grad, weight_grads = state(
+            dq,
+            dk,
+            dv,
+            x,
+            ctx.residual_delta,
+            factor,
+            q_fp8,
+            q_scale,
+            k_fp8,
+            k_scale,
+            v_fp8,
+            v_scale,
+            x_column,
+            x_column_scale,
+            inverse_rms,
+            dresidual_out,
+        )
         return (
             dx,
             dresidual_delta,
-            factor_grad.bfloat16(),
+            factor_grad,
             weight_grads[0].float(),
             weight_grads[1].float(),
             weight_grads[2].float(),
@@ -335,6 +499,7 @@ class FP8Attention(nn.Module):
         self._synced_versions = None
         self._fp8_dirty = False
         self._forward_states = {}
+        self._backward_states = {}
         self.reset_projection_parameters()
         self._sync_if_needed()
 
@@ -355,7 +520,6 @@ class FP8Attention(nn.Module):
             self.v_weight._version,
         )
         self._fp8_dirty = False
-        self._forward_states.clear()
         return self
 
     def mark_fp8_dirty(self):
@@ -373,13 +537,8 @@ class FP8Attention(nn.Module):
 
     def _forward_state(self, x, residual_delta, factor):
         key = (
-            x.data_ptr(),
-            0 if residual_delta is None else residual_delta.data_ptr(),
-            factor.data_ptr(),
             tuple(x.shape),
-            self._q_fp8.data_ptr(),
-            self._k_fp8.data_ptr(),
-            self._v_fp8.data_ptr(),
+            residual_delta is not None,
             self.qkv_forward_config,
             self.raster_group,
         )
@@ -394,7 +553,57 @@ class FP8Attention(nn.Module):
                 self.qkv_forward_config,
                 self.raster_group,
             )
-            self._forward_states = {key: state}
+            self._forward_states[key] = state
+        return state
+
+    def _backward_state(
+        self,
+        dq,
+        dk,
+        dv,
+        x,
+        residual_delta,
+        factor,
+        q_fp8,
+        q_scale,
+        k_fp8,
+        k_scale,
+        v_fp8,
+        v_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+    ):
+        key = (
+            tuple(x.shape),
+            residual_delta is not None,
+            self.dx_config,
+            self.dw_config,
+            self.raster_group,
+        )
+        state = self._backward_states.get(key)
+        if state is None:
+            state = _QKVBackwardState(
+                dq,
+                dk,
+                dv,
+                x,
+                residual_delta,
+                factor,
+                q_fp8,
+                q_scale,
+                k_fp8,
+                k_scale,
+                v_fp8,
+                v_scale,
+                x_column,
+                x_column_scale,
+                inverse_rms,
+                dx_config=self.dx_config,
+                dw_config=self.dw_config,
+                raster_group=self.raster_group,
+            )
+            self._backward_states[key] = state
         return state
 
     def forward(
@@ -478,9 +687,119 @@ class _GateUpForwardState:
             up_out=self.up_linear,
         )
 
-    def __call__(self):
+    def __call__(
+        self,
+        x,
+        residual_delta,
+        factor,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+    ):
+        self.norm.rebind(x, residual_delta, factor)
+        self.forward.rebind(
+            self.norm.row_fp8,
+            self.norm.row_scale,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+        )
         self.norm()
         return self.forward(), self.norm.sum_out
+
+
+class _GateUpBackwardState:
+    def __init__(
+        self,
+        dy,
+        gate_linear,
+        up_linear,
+        x,
+        residual_delta,
+        factor,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+        *,
+        dx_config,
+        wgrad_config,
+        raster_group,
+    ):
+        self.fused = MXFP8SwiGLUBackward(
+            dy,
+            gate_linear,
+            up_linear,
+            x,
+            gate_fp8,
+            up_fp8,
+            gate_scale,
+            up_scale,
+            x_column,
+            x_column_scale,
+            dx_config=dx_config,
+            wgrad_config=wgrad_config,
+            raster_group=raster_group,
+        )
+        self.norm_backward = FusedAddRMSNormBackwardPlan(
+            self.fused.dx_plan.out,
+            x,
+            residual_delta,
+            factor,
+            inverse_rms,
+        )
+
+    def __call__(
+        self,
+        dy,
+        gate_linear,
+        up_linear,
+        x,
+        residual_delta,
+        factor,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+        dresidual_out,
+    ):
+        self.fused.rebind(
+            dy,
+            gate_linear,
+            up_linear,
+            x,
+            gate_fp8,
+            up_fp8,
+            gate_scale,
+            up_scale,
+            x_column,
+            x_column_scale,
+            reallocate=True,
+        )
+        dx_norm, gate_grad, up_grad = self.fused()
+        self.norm_backward.allocate_workspace()
+        self.norm_backward.rebind(
+            dx_norm,
+            x,
+            residual_delta,
+            factor,
+            inverse_rms,
+            dsum=dresidual_out,
+        )
+        dx, dresidual_delta, factor_grad = self.norm_backward()
+        factor_grad = factor_grad.bfloat16()
+        result = dx, dresidual_delta, factor_grad, gate_grad, up_grad
+        self.fused.release_workspace()
+        self.norm_backward.release_workspace()
+        return result
 
 
 class _PrenormGateUp(torch.autograd.Function):
@@ -496,7 +815,15 @@ class _PrenormGateUp(torch.autograd.Function):
     ):
         module._sync_if_needed()
         state = module._forward_state(x, residual_delta, factor)
-        hidden, residual_out = state()
+        hidden, residual_out = state(
+            x,
+            residual_delta,
+            factor,
+            module._gate_fp8,
+            module._gate_scale,
+            module._up_fp8,
+            module._up_scale,
+        )
         ctx.module = module
         ctx.x = x
         ctx.residual_delta = residual_delta
@@ -535,35 +862,42 @@ class _PrenormGateUp(torch.autograd.Function):
             inverse_rms,
         ) = ctx.saved_tensors
         module = ctx.module
-        fused = MXFP8SwiGLUBackward(
-            dy.contiguous().to(torch.bfloat16),
+        dy = dy.contiguous().to(torch.bfloat16)
+        state = module._backward_state(
+            dy,
             gate_linear,
             up_linear,
             x,
+            ctx.residual_delta,
+            factor,
             gate_fp8,
-            up_fp8,
             gate_scale,
+            up_fp8,
             up_scale,
             x_column,
             x_column_scale,
-            dx_config=module.dx_config,
-            wgrad_config=module.wgrad_config,
-            raster_group=module.raster_group,
+            inverse_rms,
         )
-        dx_norm, gate_grad, up_grad = fused()
-        norm_backward = FusedAddRMSNormBackwardPlan(
-            dx_norm,
-            ctx.x,
+        dx, dresidual_delta, factor_grad, gate_grad, up_grad = state(
+            dy,
+            gate_linear,
+            up_linear,
+            x,
             ctx.residual_delta,
             factor,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+            x_column,
+            x_column_scale,
             inverse_rms,
-            dsum=dresidual_out,
+            dresidual_out,
         )
-        dx, dresidual_delta, factor_grad = norm_backward()
         return (
             dx,
             dresidual_delta,
-            factor_grad.bfloat16(),
+            factor_grad,
             gate_grad.float(),
             up_grad.float(),
             None,
@@ -626,6 +960,7 @@ class PrenormSwiGLU(nn.Module):
         self._synced_versions = None
         self._fp8_dirty = False
         self._forward_states = {}
+        self._backward_states = {}
         self.reset_parameters()
         self._sync_if_needed()
 
@@ -648,7 +983,6 @@ class PrenormSwiGLU(nn.Module):
             self.up_weight._version,
         )
         self._fp8_dirty = False
-        self._forward_states.clear()
         return self
 
     def mark_fp8_dirty(self):
@@ -663,12 +997,7 @@ class PrenormSwiGLU(nn.Module):
 
     def _forward_state(self, x, residual_delta, factor):
         key = (
-            x.data_ptr(),
-            residual_delta.data_ptr(),
-            factor.data_ptr(),
             tuple(x.shape),
-            self._gate_fp8.data_ptr(),
-            self._up_fp8.data_ptr(),
             self.forward_config,
             self.raster_group,
         )
@@ -685,7 +1014,52 @@ class PrenormSwiGLU(nn.Module):
                 self.forward_config,
                 self.raster_group,
             )
-            self._forward_states = {key: state}
+            self._forward_states[key] = state
+        return state
+
+    def _backward_state(
+        self,
+        dy,
+        gate_linear,
+        up_linear,
+        x,
+        residual_delta,
+        factor,
+        gate_fp8,
+        gate_scale,
+        up_fp8,
+        up_scale,
+        x_column,
+        x_column_scale,
+        inverse_rms,
+    ):
+        key = (
+            tuple(x.shape),
+            self.dx_config,
+            self.wgrad_config,
+            self.raster_group,
+        )
+        state = self._backward_states.get(key)
+        if state is None:
+            state = _GateUpBackwardState(
+                dy,
+                gate_linear,
+                up_linear,
+                x,
+                residual_delta,
+                factor,
+                gate_fp8,
+                gate_scale,
+                up_fp8,
+                up_scale,
+                x_column,
+                x_column_scale,
+                inverse_rms,
+                dx_config=self.dx_config,
+                wgrad_config=self.wgrad_config,
+                raster_group=self.raster_group,
+            )
+            self._backward_states[key] = state
         return state
 
     def forward(self, x, residual_delta):

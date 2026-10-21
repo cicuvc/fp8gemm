@@ -127,6 +127,8 @@ class SiluBwdQuantizeLibrary:
         self.lib.tk_silu_bwd_q_create.restype = ct.c_void_p
         self.lib.tk_silu_bwd_q_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         self.lib.tk_silu_bwd_q_launch.restype = ct.c_int
+        self.lib.tk_silu_bwd_q_rebind.argtypes = [ct.c_void_p] * 12
+        self.lib.tk_silu_bwd_q_rebind.restype = ct.c_int
         self.lib.tk_silu_bwd_q_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
         self.lib.tk_silu_bwd_q_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_silu_bwd_q_error.restype = ct.c_char_p
@@ -212,6 +214,7 @@ class SiluBwdQuantizePlan:
 
         self.owner = owner
         self.dy, self.half_gate, self.up = dy, half_gate, up
+        self.m, self.n, self.device = m, n, dy.device
         self.handle = owner.lib.tk_silu_bwd_q_create(
             dy.data_ptr(),
             half_gate.data_ptr(),
@@ -256,6 +259,63 @@ class SiluBwdQuantizePlan:
             self.up_col_scale,
         )
 
+    def reallocate_outputs(self):
+        mp = (self.m + 127) // 128 * 128
+        mp16 = (self.m + 15) // 16 * 16
+        n = self.n
+        self.gate_row = torch.empty(
+            (self.m, self.n), device=self.device, dtype=torch.float8_e4m3fn
+        )
+        self.up_row = torch.empty_like(self.gate_row)
+        self.gate_col = torch.empty(
+            (n, mp), device=self.device, dtype=torch.float8_e4m3fn
+        )
+        self.up_col = torch.empty_like(self.gate_col)
+        return self
+
+    def rebind(self, dy, half_gate, up):
+        if (
+            dy.shape != (self.m, self.n)
+            or half_gate.shape != dy.shape
+            or up.shape != dy.shape
+        ):
+            raise ValueError("dy, half_gate, and up must keep the plan shape")
+        if (
+            dy.dtype != torch.bfloat16
+            or half_gate.dtype != dy.dtype
+            or up.dtype != dy.dtype
+        ):
+            raise ValueError("Expected BF16 inputs")
+        inputs = [dy, half_gate, up]
+        if any(
+            tensor.device != self.device or not tensor.is_contiguous()
+            for tensor in inputs
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        self.dy, self.half_gate, self.up = dy, half_gate, up
+        status = self.owner.lib.tk_silu_bwd_q_rebind(
+            self.handle,
+            dy.data_ptr(),
+            half_gate.data_ptr(),
+            up.data_ptr(),
+            self.gate_row.data_ptr(),
+            self.gate_row_scale.data_ptr(),
+            self.up_row.data_ptr(),
+            self.up_row_scale.data_ptr(),
+            self.gate_col.data_ptr(),
+            self.gate_col_scale.data_ptr(),
+            self.up_col.data_ptr(),
+            self.up_col_scale.data_ptr(),
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_silu_bwd_q_error().decode())
+        return self
+
+    def release(self):
+        self.dy = self.half_gate = self.up = None
+        self.gate_row = self.up_row = None
+        self.gate_col = self.up_col = None
+
     def __del__(self):
         if getattr(self, "handle", None):
             self.owner.lib.tk_silu_bwd_q_destroy(self.handle)
@@ -285,6 +345,7 @@ class SiluBwdDirectQuantizePlan:
         self.x = x
         self.owner = owner
         self.m, self.k = m, k
+        self.device = x.device
         self.transpose = bool(transpose)
         self.mp = (m + 127) // 128 * 128
         self.mp16 = (m + 15) // 16 * 16
@@ -336,6 +397,44 @@ class SiluBwdDirectQuantizePlan:
         if status:
             raise RuntimeError(self.owner.lib.tk_silu_bwd_q_error().decode())
         return self.row_fp8, self.row_scale, self.column_fp8, self.column_scale
+
+    def rebind(self, x):
+        if x.shape != (self.m, self.k) or x.dtype != torch.bfloat16:
+            raise ValueError("Expected BF16 X with the plan shape")
+        if not x.is_cuda or not x.is_contiguous() or x.device != self.device:
+            raise ValueError("Expected contiguous CUDA BF16 X[M,K]")
+        self.x = x
+        status = self.owner.lib.tk_silu_bwd_q_rebind(
+            self.handle,
+            x.data_ptr(),
+            x.data_ptr(),
+            x.data_ptr(),
+            self.row_fp8.data_ptr(),
+            self.row_scale.data_ptr(),
+            self.row_fp8.data_ptr(),
+            self.row_scale.data_ptr(),
+            self.column_fp8.data_ptr(),
+            self.column_scale.data_ptr(),
+            self.column_fp8.data_ptr(),
+            self.column_scale.data_ptr(),
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_silu_bwd_q_error().decode())
+        return self
+
+    def reallocate_outputs(self, x=None):
+        self.row_fp8 = torch.empty(
+            (self.m, self.k), device=self.device, dtype=torch.float8_e4m3fn
+        )
+        column_shape = (self.k, self.mp) if self.transpose else (self.mp, self.k)
+        self.column_fp8 = torch.empty(
+            column_shape, device=self.device, dtype=torch.float8_e4m3fn
+        )
+        return self
+
+    def release(self):
+        self.x = None
+        self.row_fp8 = self.column_fp8 = None
 
     def __del__(self):
         if getattr(self, "handle", None):

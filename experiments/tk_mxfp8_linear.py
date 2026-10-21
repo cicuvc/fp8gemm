@@ -31,7 +31,14 @@ class _ForwardState:
             raster_group=raster_group,
         )
 
-    def __call__(self):
+    def __call__(self, x, weight_fp8, weight_scale):
+        self.quantize.rebind(x)
+        self.gemm.rebind(
+            self.quantize.row_fp8,
+            weight_fp8,
+            self.quantize.row_scale,
+            weight_scale,
+        )
         self.quantize()
         return self.gemm()
 
@@ -67,10 +74,40 @@ class _BackwardState:
             config=dw_config,
             raster_group=raster_group,
         )
+        self.device = dy.device
+        self.dx_shape = (dy.shape[0], x_column.shape[1])
+        self.dw_shape = (weight_fp8.shape[0], x_column.shape[1])
 
-    def __call__(self):
+    def __call__(
+        self,
+        dy,
+        x_column,
+        x_column_scale,
+        weight_fp8,
+        weight_scale,
+    ):
+        self.dy_quantize.reallocate_outputs(dy)
+        self.dy_quantize.rebind(dy)
+        self.dx.rebind(
+            self.dy_quantize.row_fp8,
+            weight_fp8,
+            self.dy_quantize.row_scale,
+            weight_scale,
+            out=torch.empty(self.dx_shape, device=self.device, dtype=torch.bfloat16),
+        )
+        self.dw.rebind(
+            self.dy_quantize.column_fp8,
+            x_column,
+            self.dy_quantize.column_scale,
+            x_column_scale,
+            out=torch.empty(self.dw_shape, device=self.device, dtype=torch.bfloat16),
+        )
         self.dy_quantize()
-        return self.dx(), self.dw()
+        dx, dw = self.dx(), self.dw()
+        self.dy_quantize.release()
+        self.dx.release()
+        self.dw.release()
+        return dx, dw
 
 
 class _MXFP8LinearFunction(torch.autograd.Function):
@@ -78,7 +115,7 @@ class _MXFP8LinearFunction(torch.autograd.Function):
     def forward(ctx, x, master_weight, module):
         module._sync_if_needed()
         state = module._forward_state(x)
-        out = state()
+        out = state(x, module._weight_fp8, module._weight_scale)
         ctx.module = module
         ctx.save_for_backward(
             x,
@@ -105,7 +142,13 @@ class _MXFP8LinearFunction(torch.autograd.Function):
             weight_fp8,
             weight_scale,
         )
-        dx, dw = state()
+        dx, dw = state(
+            dy,
+            x_column,
+            x_column_scale,
+            weight_fp8,
+            weight_scale,
+        )
         return dx, dw.float(), None
 
 
@@ -171,8 +214,6 @@ class MXFP8Linear(nn.Module):
             )
         self._synced_version = self.master_weight._version
         self._fp8_dirty = False
-        self._forward_states.clear()
-        self._backward_states.clear()
         return self
 
     def refresh_fp8_weights(self):
@@ -194,9 +235,7 @@ class MXFP8Linear(nn.Module):
     def _forward_state(self, x):
         key = (
             x.device.index,
-            x.data_ptr(),
             tuple(x.shape),
-            self._weight_fp8.data_ptr(),
             self.forward_config,
             self.raster_group,
         )
@@ -209,7 +248,7 @@ class MXFP8Linear(nn.Module):
                 self.forward_config,
                 self.raster_group,
             )
-            self._forward_states = {key: state}
+            self._forward_states[key] = state
         return state
 
     def _backward_state(
@@ -222,9 +261,8 @@ class MXFP8Linear(nn.Module):
     ):
         key = (
             dy.device.index,
-            dy.data_ptr(),
-            x_column.data_ptr(),
-            weight_fp8.data_ptr(),
+            tuple(dy.shape),
+            tuple(x_column.shape),
             self.dx_config,
             self.dw_config,
             self.raster_group,
@@ -241,7 +279,7 @@ class MXFP8Linear(nn.Module):
                 self.dw_config,
                 self.raster_group,
             )
-            self._backward_states = {key: state}
+            self._backward_states[key] = state
         return state
 
     def bind_optimizer(self, optimizer):

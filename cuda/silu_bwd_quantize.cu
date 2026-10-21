@@ -344,6 +344,10 @@ struct PlanBase {
     virtual ~PlanBase()=default;
     virtual void launch(cudaStream_t)=0;
     virtual void info(int*)=0;
+    virtual void rebind(
+        void*dy,void*half_gate,void*up,
+        void*gate_row,void*gate_row_scale,void*up_row,void*up_row_scale,
+        void*gate_col,void*gate_col_scale,void*up_col,void*up_col_scale)=0;
 };
 
 template<bool Direct,bool Transposed=false>
@@ -386,6 +390,22 @@ struct Plan final:PlanBase {
     }
     void info(int*out) override {
         out[0]=blocks;out[1]=256;out[2]=kSharedBytes<Direct>;
+    }
+    void rebind(
+        void*dy,void*half_gate,void*up,
+        void*gate_row,void*gate_row_scale,void*up_row,void*up_row_scale,
+        void*gate_col,void*gate_col_scale,void*up_col,void*up_col_scale) override {
+        args.dy=static_cast<const uint16_t*>(dy);
+        args.half_gate=static_cast<const uint16_t*>(half_gate);
+        args.up=static_cast<const uint16_t*>(up);
+        args.gate_row=static_cast<uint8_t*>(gate_row);
+        args.up_row=static_cast<uint8_t*>(up_row);
+        args.gate_col=static_cast<uint8_t*>(gate_col);
+        args.up_col=static_cast<uint8_t*>(up_col);
+        args.gate_row_scale=static_cast<uint8_t*>(gate_row_scale);
+        args.up_row_scale=static_cast<uint8_t*>(up_row_scale);
+        args.gate_col_scale=static_cast<uint8_t*>(gate_col_scale);
+        args.up_col_scale=static_cast<uint8_t*>(up_col_scale);
     }
 };
 
@@ -452,6 +472,21 @@ extern "C" int tk_silu_bwd_q_launch(void*opaque,void*stream) {
     try {
         static_cast<PlanBase*>(opaque)->launch(static_cast<cudaStream_t>(stream));
         check(cudaGetLastError());
+        return 0;
+    }catch(const std::exception &exception) {
+        error=exception.what();return -1;
+    }
+}
+extern "C" int tk_silu_bwd_q_rebind(
+    void*opaque,void*dy,void*half_gate,void*up,
+    void*gate_row,void*gate_row_scale,void*up_row,void*up_row_scale,
+    void*gate_col,void*gate_col_scale,void*up_col,void*up_col_scale) {
+    using namespace fp8gemm::silu_bwd_quantize;
+    try {
+        static_cast<PlanBase*>(opaque)->rebind(
+            dy,half_gate,up,
+            gate_row,gate_row_scale,up_row,up_row_scale,
+            gate_col,gate_col_scale,up_col,up_col_scale);
         return 0;
     }catch(const std::exception &exception) {
         error=exception.what();return -1;
