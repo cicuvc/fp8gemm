@@ -25,6 +25,8 @@ class MXFP8SwiGLUBackward:
         weight_up,
         weight_gate_scale,
         weight_up_scale,
+        x_column=None,
+        x_column_scale=None,
         *,
         dx_config=6,
         wgrad_config=12,
@@ -32,17 +34,33 @@ class MXFP8SwiGLUBackward:
     ):
         from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library as WgradLibrary
 
-        if x.ndim != 2 or dy.shape[1] != x.shape[1]:
-            raise ValueError("Expected X[M,K] and dY[M,N]")
-        if weight_gate.shape != (dy.shape[1], x.shape[1]):
-            raise ValueError("Expected gate/up weights [N,K]")
+        if (
+            x.ndim != 2
+            or dy.ndim != 2
+            or dy.shape[0] != x.shape[0]
+            or weight_gate.shape != (dy.shape[1], x.shape[1])
+            or weight_up.shape != weight_gate.shape
+        ):
+            raise ValueError("Expected X[M,K], dY[M,H], and weights [H,K]")
         self.dy, self.half_gate, self.up, self.x = dy, half_gate, up, x
         self.weight_gate, self.weight_up = weight_gate, weight_up
         self.weight_gate_scale = weight_gate_scale
         self.weight_up_scale = weight_up_scale
 
         self.quantize = SiluBwdQuantizeLibrary().plan(dy, half_gate, up)
-        self.quantize_x = ColumnQuantizePlan(x)
+        if (x_column is None) != (x_column_scale is None):
+            raise ValueError("x_column and x_column_scale must be supplied together")
+        mp = (x.shape[0] + 127) // 128 * 128
+        if x_column is not None:
+            if x_column.shape != (mp, x.shape[1]):
+                raise ValueError("Invalid prequantized X column buffer")
+            if x_column_scale.shape != (
+                mp // 128,
+                (x.shape[1] + 15) // 16 * 16,
+            ):
+                raise ValueError("Invalid prequantized X column scales")
+        self.x_column, self.x_column_scale = x_column, x_column_scale
+        self.quantize_x = None if x_column is not None else ColumnQuantizePlan(x)
         self.dx_plan = SwiGLUDgradLibrary().plan(
             self.quantize.gate_row,
             self.quantize.up_row,
@@ -58,24 +76,25 @@ class MXFP8SwiGLUBackward:
         wgrad_library = WgradLibrary()
         self.gate_weight_grad = wgrad_library.plan(
             self.quantize.gate_col,
-            self.quantize_x.out,
+            x_column if x_column is not None else self.quantize_x.out,
             self.quantize.gate_col_scale,
-            self.quantize_x.scales,
+            x_column_scale if x_column_scale is not None else self.quantize_x.scales,
             config=wgrad_config,
             raster_group=raster_group,
         )
         self.up_weight_grad = wgrad_library.plan(
             self.quantize.up_col,
-            self.quantize_x.out,
+            x_column if x_column is not None else self.quantize_x.out,
             self.quantize.up_col_scale,
-            self.quantize_x.scales,
+            x_column_scale if x_column_scale is not None else self.quantize_x.scales,
             config=wgrad_config,
             raster_group=raster_group,
         )
 
     def __call__(self):
         self.quantize()
-        self.quantize_x()
+        if self.quantize_x is not None:
+            self.quantize_x()
         dx = self.dx_plan()
         gate_weight_grad = self.gate_weight_grad()
         up_weight_grad = self.up_weight_grad()
