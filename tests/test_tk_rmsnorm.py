@@ -5,7 +5,11 @@ import torch
 
 from experiments.tk_mxfp8_dgrad import RowQuantizePlan
 from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
-from experiments.tk_rmsnorm import RMSNormBackwardPlan, RMSNormDualQuantPlan
+from experiments.tk_rmsnorm import (
+    FusedAddRMSNormPlan,
+    RMSNormBackwardPlan,
+    RMSNormDualQuantPlan,
+)
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),
@@ -123,3 +127,93 @@ def test_backward_reuse_and_graph():
     graph.replay()
     torch.testing.assert_close(plan.dx, first_dx, rtol=0, atol=0)
     torch.testing.assert_close(plan.factor_grad, first_factor_grad, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("write_sum", [False, True])
+@pytest.mark.parametrize("y_mode", ["none", "bf16", "mxfp8"])
+def test_fused_add_modes(write_sum, y_mode):
+    m, k = 137, 192
+    torch.manual_seed(121)
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    factor = torch.randn(k, device="cuda").mul_(0.1).add_(1.0)
+    plan = FusedAddRMSNormPlan(
+        x,
+        residual,
+        factor,
+        eps=1e-6,
+        write_sum=write_sum,
+        y_mode=y_mode,
+    )
+    (
+        inverse,
+        sum_out,
+        y_bf16,
+        row_fp8,
+        row_scale,
+        column_fp8,
+        column_scale,
+    ) = plan()
+    torch.cuda.synchronize()
+    summed = x.float() + residual.float()
+    reference_inverse = torch.rsqrt(summed.square().mean(1) + 1e-6)
+    torch.testing.assert_close(inverse, reference_inverse, rtol=2e-7, atol=2e-7)
+    if write_sum:
+        torch.testing.assert_close(sum_out, summed.bfloat16(), rtol=0, atol=0)
+    else:
+        assert sum_out is None
+
+    normalized = (summed * inverse[:, None] * factor[None, :]).bfloat16()
+    if y_mode == "bf16":
+        torch.testing.assert_close(y_bf16, normalized, rtol=0, atol=0)
+    elif y_mode == "none":
+        assert y_bf16 is None
+    else:
+        assert y_bf16 is None
+        expected_row, expected_row_scale = RowQuantizePlan(normalized)()
+        expected_column, expected_column_scale = ColumnQuantizePlan(normalized)()
+        torch.testing.assert_close(
+            row_fp8.view(torch.uint8),
+            expected_row.view(torch.uint8),
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(row_scale, expected_row_scale, rtol=0, atol=0)
+        torch.testing.assert_close(
+            column_fp8.view(torch.uint8),
+            expected_column.view(torch.uint8),
+            rtol=0,
+            atol=0,
+        )
+        torch.testing.assert_close(
+            column_scale, expected_column_scale, rtol=0, atol=0
+        )
+
+
+def test_fused_add_without_factor_and_graph():
+    m, k = 33, 128
+    torch.manual_seed(122)
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    plan = FusedAddRMSNormPlan(
+        x,
+        residual,
+        None,
+        write_sum=True,
+        y_mode="mxfp8",
+    )
+    first = [value.clone() for value in plan() if value is not None]
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        plan()
+    saved = residual.clone()
+    residual.zero_()
+    graph.replay()
+    torch.cuda.synchronize()
+    reference_sum = x.float().bfloat16()
+    torch.testing.assert_close(plan.sum_out, reference_sum, rtol=0, atol=0)
+    residual.copy_(saved)
+    graph.replay()
+    current = [value.clone() for value in plan() if value is not None]
+    for actual, expected in zip(current, first):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)

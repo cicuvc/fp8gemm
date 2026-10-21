@@ -383,3 +383,279 @@ class RMSNormBackwardPlan:
             num_warps=4,
         )
         return self.dx, self.factor_grad
+
+
+@triton.jit
+def _inverse_rms_add(
+    x,
+    residual,
+    inverse_rms,
+    sum_out,
+    M,
+    K,
+    x_stride,
+    residual_stride,
+    sum_stride,
+    eps,
+    WRITE_SUM: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK_K)
+    mask = cols < K
+    x_values = tl.load(
+        x + row * x_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    residual_values = tl.load(
+        residual + row * residual_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    summed = x_values + residual_values
+    mean_square = tl.sum(summed * summed, axis=0) / K
+    tl.store(inverse_rms + row, tl.rsqrt(mean_square + eps))
+    if WRITE_SUM:
+        tl.store(
+            sum_out + row * sum_stride + cols,
+            summed.to(tl.bfloat16),
+            mask=mask,
+        )
+
+
+@triton.jit
+def _add_rmsnorm_output(
+    x,
+    residual,
+    factor,
+    inverse_rms,
+    y_bf16,
+    row_fp8,
+    row_scale,
+    column_fp8,
+    column_scale,
+    M,
+    K,
+    MP,
+    MP16,
+    SP,
+    x_stride,
+    residual_stride,
+    factor_stride,
+    y_stride,
+    row_stride,
+    column_stride,
+    Y_MODE: tl.constexpr,
+    HAS_FACTOR: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row_block = tl.program_id(0)
+    col_block = tl.program_id(1)
+    rows = row_block * 32 + tl.arange(0, 32)
+    cols = col_block * BLOCK_K + tl.arange(0, BLOCK_K)
+    row_mask = rows < M
+    col_mask = cols < K
+    mask = row_mask[:, None] & col_mask[None, :]
+    summed = (
+        tl.load(
+            x + rows[:, None] * x_stride + cols[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        + tl.load(
+            residual + rows[:, None] * residual_stride + cols[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+    )
+    inverse = tl.load(
+        inverse_rms + rows,
+        mask=row_mask,
+        other=0.0,
+    ).to(tl.float32)
+    if HAS_FACTOR:
+        scale_factor = tl.load(
+            factor + cols * factor_stride,
+            mask=col_mask,
+            other=0.0,
+        ).to(tl.float32)
+        normalized = summed * inverse[:, None] * scale_factor[None, :]
+    else:
+        normalized = summed * inverse[:, None]
+    normalized_bf16 = normalized.to(tl.bfloat16)
+    if Y_MODE == 1:
+        tl.store(
+            y_bf16 + rows[:, None] * y_stride + cols[None, :],
+            normalized_bf16,
+            mask=mask,
+        )
+    if Y_MODE == 2:
+        row_q, row_s = mxtest.online_scale(normalized_bf16)
+        tl.store(
+            row_fp8 + rows[:, None] * row_stride + cols[None, :],
+            row_q,
+            mask=mask,
+        )
+        row_word = tl.sum(
+            row_s.to(tl.uint32)
+            << (8 * tl.arange(0, 4))[None, :],
+            axis=1,
+        )
+        tl.store(
+            row_scale + col_block * MP16 + rows,
+            row_word,
+            mask=rows < MP16,
+        )
+        column_q_t, column_s = mxtest.online_scale(tl.trans(normalized_bf16))
+        tl.store(
+            column_fp8 + rows[:, None] * column_stride + cols[None, :],
+            tl.trans(column_q_t),
+            mask=col_mask[None, :],
+        )
+        column_values = tl.reshape(column_s.to(tl.uint32), (BLOCK_K,))
+        tl.atomic_or(
+            column_scale + (row_block // 4) * SP + cols,
+            column_values << (8 * (row_block % 4)),
+            mask=cols < SP,
+        )
+
+
+class FusedAddRMSNormPlan:
+    """``RMSNorm(x + residual)`` with compile-time output modes."""
+
+    Y_NONE = 0
+    Y_BF16 = 1
+    Y_MXFP8 = 2
+    Y_MODES = {"none": Y_NONE, "bf16": Y_BF16, "mxfp8": Y_MXFP8}
+
+    def __init__(
+        self,
+        x,
+        residual,
+        factor=None,
+        *,
+        eps=1e-6,
+        write_sum=False,
+        y_mode="none",
+    ):
+        if (
+            x.ndim != 2
+            or x.shape != residual.shape
+            or x.dtype != torch.bfloat16
+            or residual.dtype != torch.bfloat16
+            or not x.is_cuda
+            or residual.device != x.device
+        ):
+            raise ValueError("Expected equal CUDA BF16 X and residual[M,K]")
+        if factor is not None:
+            if factor.ndim != 1 or factor.shape[0] != x.shape[1]:
+                raise ValueError("Expected factor[K]")
+            if factor.dtype not in (torch.float32, torch.bfloat16):
+                raise ValueError("Factor must be FP32 or BF16")
+            if not factor.is_cuda or factor.device != x.device:
+                raise ValueError("Expected factor on the input device")
+        if y_mode not in self.Y_MODES:
+            raise ValueError("y_mode must be 'none', 'bf16', or 'mxfp8'")
+        m, k = x.shape
+        if k % 32:
+            raise ValueError("K must be a multiple of 32")
+        self.x, self.residual, self.factor = x, residual, factor
+        self.eps = float(eps)
+        self.m, self.k = m, k
+        self.mp = (m + 127) // 128 * 128
+        self.mp16 = (m + 15) // 16 * 16
+        self.sp = (k + 15) // 16 * 16
+        self.y_mode = self.Y_MODES[y_mode]
+        self.write_sum = bool(write_sum)
+        self.inverse_rms = torch.empty(m, device=x.device, dtype=torch.float32)
+        self.sum_out = (
+            torch.empty_like(x) if self.write_sum else None
+        )
+        self.y_bf16 = (
+            torch.empty_like(x) if self.y_mode == self.Y_BF16 else None
+        )
+        if self.y_mode == self.Y_MXFP8:
+            self.row_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+            self.row_scale = torch.zeros(
+                ((k + 127) // 128, self.mp16),
+                device=x.device,
+                dtype=torch.int32,
+            )
+            self.column_fp8 = torch.empty(
+                (self.mp, k), device=x.device, dtype=torch.float8_e4m3fn
+            )
+            self.column_scale = torch.zeros(
+                (self.mp // 128, self.sp),
+                device=x.device,
+                dtype=torch.int32,
+            )
+        else:
+            self.row_fp8 = self.row_scale = None
+            self.column_fp8 = self.column_scale = None
+
+    def __call__(self):
+        sum_ptr = self.sum_out if self.sum_out is not None else self.x
+        _inverse_rms_add[(self.m,)](
+            self.x,
+            self.residual,
+            self.inverse_rms,
+            sum_ptr,
+            self.m,
+            self.k,
+            self.x.stride(0),
+            self.residual.stride(0),
+            self.sum_out.stride(0) if self.sum_out is not None else 0,
+            self.eps,
+            WRITE_SUM=self.write_sum,
+            BLOCK_K=triton.next_power_of_2(self.k),
+        )
+        if self.y_mode != self.Y_NONE:
+            if self.y_mode == self.Y_MXFP8:
+                self.column_scale.zero_()
+            factor = self.factor if self.factor is not None else self.x
+            factor_stride = self.factor.stride(0) if self.factor is not None else 0
+            y_ptr = self.y_bf16 if self.y_bf16 is not None else self.x
+            row_ptr = self.row_fp8 if self.row_fp8 is not None else self.x
+            row_scale_ptr = self.row_scale if self.row_scale is not None else self.x
+            column_ptr = self.column_fp8 if self.column_fp8 is not None else self.x
+            column_scale_ptr = (
+                self.column_scale if self.column_scale is not None else self.x
+            )
+            _add_rmsnorm_output[
+                (self.mp // 32, triton.cdiv(self.k, 128))
+            ](
+                self.x,
+                self.residual,
+                factor,
+                self.inverse_rms,
+                y_ptr,
+                row_ptr,
+                row_scale_ptr,
+                column_ptr,
+                column_scale_ptr,
+                self.m,
+                self.k,
+                self.mp,
+                self.mp16,
+                self.sp,
+                self.x.stride(0),
+                self.residual.stride(0),
+                factor_stride,
+                self.y_bf16.stride(0) if self.y_bf16 is not None else 0,
+                self.k,
+                self.k,
+                Y_MODE=self.y_mode,
+                HAS_FACTOR=self.factor is not None,
+                BLOCK_K=128,
+                num_warps=4,
+            )
+        return (
+            self.inverse_rms,
+            self.sum_out,
+            self.y_bf16,
+            self.row_fp8,
+            self.row_scale,
+            self.column_fp8,
+            self.column_scale,
+        )
