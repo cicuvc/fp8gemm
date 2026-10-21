@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from fp8_linear import FP8Linear
 from experiments.tk_mxfp8_dgrad import RowQuantizePlan
+from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
 from experiments.tk_mxfp8_swiglu_layer import MXFP8SwiGLU
@@ -17,8 +17,16 @@ pytestmark = pytest.mark.skipif(
 
 def test_forward_and_backward_match_explicit_component_chain():
     torch.manual_seed(404)
-    layer = MXFP8SwiGLU(128, 128, 96, device="cuda")
-    assert layer.down_proj.backward_backend == "cuda"
+    layer = MXFP8SwiGLU(
+        128,
+        128,
+        96,
+        bias=False,
+        device="cuda",
+        down_forward_config=0,
+        down_dx_config=2,
+        down_dw_config=0,
+    )
     x = torch.randn((137, 128), device="cuda", dtype=torch.bfloat16).requires_grad_()
     dy = torch.randn((137, 96), device="cuda", dtype=torch.bfloat16)
 
@@ -45,16 +53,16 @@ def test_forward_and_backward_match_explicit_component_chain():
     )
     quantized_x()
     forward()
-    reference_down = FP8Linear(
+    reference_down = MXFP8DownProjection(
         128,
         96,
-        bias=True,
         device="cuda",
-        backward_backend="triton",
+        forward_config=0,
+        dx_config=2,
+        dw_config=0,
     )
     with torch.no_grad():
         reference_down.master_weight.copy_(layer.down_proj.master_weight)
-        reference_down.bias.copy_(layer.down_proj.bias)
     reference_down.refresh_fp8_weight()
     expected_out = reference_down(forward.out)
     torch.testing.assert_close(out, expected_out, rtol=0, atol=0)
@@ -66,7 +74,6 @@ def test_forward_and_backward_match_explicit_component_chain():
             layer.gate_weight,
             layer.up_weight,
             layer.down_proj.master_weight,
-            layer.down_proj.bias,
         ),
         dy,
     )
@@ -74,7 +81,7 @@ def test_forward_and_backward_match_explicit_component_chain():
     down_out = reference_down(hidden)
     down_grads = torch.autograd.grad(
         down_out,
-        (hidden, reference_down.master_weight, reference_down.bias),
+        (hidden, reference_down.master_weight),
         dy,
     )
     backward = MXFP8SwiGLUBackward(
@@ -95,7 +102,6 @@ def test_forward_and_backward_match_explicit_component_chain():
     torch.testing.assert_close(grads[1], expected_gate.float(), rtol=0, atol=0)
     torch.testing.assert_close(grads[2], expected_up.float(), rtol=0, atol=0)
     torch.testing.assert_close(grads[3], down_grads[1], rtol=0, atol=0)
-    torch.testing.assert_close(grads[4], down_grads[2], rtol=0, atol=0)
 
 
 def test_weight_refresh_and_optimizer_hook():

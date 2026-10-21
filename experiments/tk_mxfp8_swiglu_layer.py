@@ -5,8 +5,8 @@ import math
 import torch
 from torch import nn
 
-from fp8_linear import FP8Linear
 from experiments.tk_mxfp8_dgrad import RowQuantizePlan
+from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
 
@@ -110,12 +110,14 @@ class MXFP8SwiGLU(nn.Module):
         hidden_features,
         out_features,
         *,
-        bias=True,
-        down_backward_backend="cuda",
+        bias=False,
         device=None,
         forward_config=1,
         dx_config=5,
         wgrad_config=6,
+        down_forward_config=70,
+        down_dx_config=12,
+        down_dw_config=12,
         raster_group=13,
     ):
         super().__init__()
@@ -124,10 +126,12 @@ class MXFP8SwiGLU(nn.Module):
         self.in_features = in_features
         self.hidden_features = hidden_features
         self.out_features = out_features
-        self.down_backward_backend = down_backward_backend
         self.forward_config = forward_config
         self.dx_config = dx_config
         self.wgrad_config = wgrad_config
+        self.down_forward_config = down_forward_config
+        self.down_dx_config = down_dx_config
+        self.down_dw_config = down_dw_config
         self.raster_group = raster_group
         self.gate_weight = nn.Parameter(
             torch.empty((hidden_features, in_features), dtype=torch.float32, device=device)
@@ -135,12 +139,16 @@ class MXFP8SwiGLU(nn.Module):
         self.up_weight = nn.Parameter(
             torch.empty((hidden_features, in_features), dtype=torch.float32, device=device)
         )
-        self.down_proj = FP8Linear(
+        if bias:
+            raise ValueError("MXFP8SwiGLU down projection does not support bias")
+        self.down_proj = MXFP8DownProjection(
             hidden_features,
             out_features,
-            bias=bias,
             device=device,
-            backward_backend=down_backward_backend,
+            forward_config=down_forward_config,
+            dx_config=down_dx_config,
+            dw_config=down_dw_config,
+            raster_group=raster_group,
         )
         self.register_buffer(
             "_gate_weight_fp8",
@@ -312,8 +320,7 @@ class MXFP8SwiGLU(nn.Module):
     def extra_repr(self):
         return (
             f"in_features={self.in_features}, hidden_features={self.hidden_features}, "
-            f"out_features={self.out_features}, bias={self.down_proj.bias is not None}, "
-            f"down_backward_backend={self.down_backward_backend!r}, "
+            f"out_features={self.out_features}, bias=False, "
             f"forward_config={self.forward_config}, dx_config={self.dx_config}, "
             f"wgrad_config={self.wgrad_config}"
         )
