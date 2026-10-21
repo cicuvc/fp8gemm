@@ -305,3 +305,42 @@ def test_fused_add_backward_graph_and_reuse():
     graph.replay()
     torch.testing.assert_close(plan.dx, first_dx, rtol=0, atol=0)
     torch.testing.assert_close(plan.factor_grad, first_factor, rtol=0, atol=0)
+
+
+def test_fused_add_backward_fuses_direct_residual_gradient():
+    m, k = 137, 128
+    torch.manual_seed(733)
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    dy = torch.randn_like(x)
+    dsum = torch.randn_like(x)
+    factor = torch.randn(k, device="cuda").mul_(0.1).add_(1.0)
+    forward = FusedAddRMSNormPlan(x, residual, factor)
+    forward()
+
+    fused = FusedAddRMSNormBackwardPlan(
+        dy,
+        x,
+        residual,
+        factor,
+        forward.inverse_rms,
+        dsum=dsum,
+    )
+    dx, dresidual, factor_grad = fused()
+
+    x_reference = x.float().requires_grad_()
+    residual_reference = residual.float().requires_grad_()
+    factor_reference = factor.float().requires_grad_()
+    summed = x_reference + residual_reference
+    inverse = torch.rsqrt(summed.square().mean(1) + 1e-6)
+    output = summed * inverse[:, None] * factor_reference[None, :]
+    torch.autograd.backward(
+        (output, summed),
+        (dy.float(), dsum.float()),
+    )
+    torch.testing.assert_close(
+        dx, x_reference.grad.bfloat16(), rtol=2e-2, atol=2e-3
+    )
+    torch.testing.assert_close(
+        dresidual, residual_reference.grad.bfloat16(), rtol=2e-2, atol=2e-3
+    )

@@ -1,0 +1,94 @@
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances | Avg (ns)  | Med (ns)  | Min (ns) | Max (ns) | StdDev (ns) |                                                 Name                                                 |
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+|     12.8 |         4788937 |         1 | 4788937.0 | 4788937.0 |  4788937 |  4788937 |         0.0 | void at::native::<unnamed>::cunn_SoftMaxBackward<(int)4, float, float, float, at::native::<unnamed>… |
+|      8.7 |         3253837 |        28 |  116208.5 |  114751.5 |   107935 |   128127 |      8377.0 | void fp8gemm::mxw::persistent_mxfp8_wgrad<(int)16, (int)128, (int)128, (int)2>(fp8gemm::mxw::Config… |
+|      7.4 |         2772723 |         1 | 2772723.0 | 2772723.0 |  2772723 |  2772723 |         0.0 | void at::native::<unnamed>::cunn_SoftMaxForward<(int)4, float, float, float, at::native::<unnamed>:… |
+|      6.4 |         2395669 |         1 | 2395669.0 | 2395669.0 |  2395669 |  2395669 |         0.0 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x256_32x3_tn_align8>(T1::Par… |
+|      6.3 |         2332789 |        46 |   50712.8 |    2784.0 |     1728 |  2185653 |    321788.1 | void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIterator… |
+|      6.2 |         2329493 |         1 | 2329493.0 | 2329493.0 |  2329493 |  2329493 |         0.0 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x64_64x3_nn_align8>(T1::Para… |
+|      5.9 |         2189526 |         1 | 2189526.0 | 2189526.0 |  2189526 |  2189526 |         0.0 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x256_32x4_nt_align8>(T1::Para… |
+|      5.4 |         2020631 |        32 |   63144.7 |     912.0 |      800 |  1977079 |    349257.4 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::bfloat16_copy_kernel_cuda(at::Te… |
+|      4.7 |         1738648 |        14 |  124189.1 |  124351.5 |   117823 |   130464 |      5423.5 | void fp8gemm::mxw::persistent_mxfp8_wgrad<(int)16, (int)64, (int)64, (int)2>(fp8gemm::mxw::Config<T… |
+|      3.4 |         1256506 |         2 |  628253.0 |  628253.0 |      704 |  1255802 |    887488.3 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<float>, std::array<c… |
+|      2.9 |         1082460 |         7 |  154637.1 |  154847.0 |   152320 |   156576 |      1551.1 | void fp8gemm::silu_bwd_quantize::silu_bwd_quantize_kernel<(bool)0, (bool)0>(fp8gemm::silu_bwd_quant… |
+|      2.9 |         1080924 |         7 |  154417.7 |  154079.0 |   153727 |   156256 |       905.5 | void flash::flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Flash_bwd_kernel_traits<(int)64, (int)64, … |
+|      2.5 |          941470 |       112 |    8406.0 |    7152.0 |     6912 |    15552 |      2264.8 | void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::n… |
+|      2.3 |          852572 |       113 |    7544.9 |    6880.0 |     3872 |    23584 |      4327.6 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<c10::BFloat16>, … |
+|      1.9 |          693820 |         7 |   99117.1 |   98912.0 |    97632 |   100959 |      1041.6 | void fp8gemm::mxswiglu::persistent_swiglu<(int)16, (int)64, (int)64, (int)2, (bool)1>(fp8gemm::mxsw… |
+|      1.8 |          687387 |         7 |   98198.1 |   98015.0 |    97375 |    99423 |       722.4 | void fp8gemm::mxswd::persistent_swiglu_dgrad<(int)16, (int)64, (int)64, (int)2>(fp8gemm::mxswd::Con… |
+|      1.8 |          679646 |        28 |   24273.1 |   18816.0 |    18112 |    41664 |      9821.8 | void fp8gemm::mxd::persistent_mxfp8_dgrad<(int)16, (int)128, (int)128, (int)2>(fp8gemm::mxd::Config… |
+|      1.4 |          521375 |        14 |   37241.1 |   37376.0 |    35360 |    38048 |       604.7 | void at::native::<unnamed>::CatArrayBatchedCopy_alignedK_contig<at::native::<unnamed>::OpaqueType<(… |
+|      1.3 |          490876 |         7 |   70125.1 |   70048.0 |    68799 |    70847 |       718.7 | void flash::flash_fwd_kernel<Flash_fwd_kernel_traits<(int)64, (int)128, (int)128, (int)4, (bool)0, … |
+|      1.3 |          471647 |        28 |   16844.5 |   15792.0 |    15167 |    21056 |      2041.3 | void fp8gemm::silu_bwd_quantize::silu_bwd_quantize_kernel<(bool)1, (bool)1>(fp8gemm::silu_bwd_quant… |
+|      1.1 |          424093 |        21 |   20194.9 |   20192.0 |    19264 |    20832 |       350.2 | void fp8gemm::persistent_mxfp8<(int)16, (int)128, (int)64, (int)2, (bool)0, (bool)0>(fp8gemm::MXCon… |
+|      1.0 |          384637 |         7 |   54948.1 |   54303.0 |    51072 |    61919 |      3482.5 | void fp8gemm::silu_bwd_quantize::silu_bwd_quantize_kernel<(bool)1, (bool)0>(fp8gemm::silu_bwd_quant… |
+|      0.8 |          298431 |         7 |   42633.0 |   42624.0 |    42016 |    43040 |       340.4 | void fp8gemm::persistent_mxfp8<(int)16, (int)128, (int)128, (int)2, (bool)0, (bool)0>(fp8gemm::MXCo… |
+|      0.8 |          298240 |         7 |   42605.7 |   42592.0 |    42016 |    43040 |       360.6 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_tn_align8>(T1::Param… |
+|      0.8 |          297599 |         7 |   42514.1 |   42464.0 |    42112 |    42944 |       248.5 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x64_32x6_nn_align8>(T1::Param… |
+|      0.8 |          288672 |        14 |   20619.4 |   20528.0 |    20256 |    21312 |       282.8 | _reduce_factor_grad                                                                                  |
+|      0.8 |          282366 |         7 |   40338.0 |   40383.0 |    39808 |    40960 |       403.0 | void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_64x128_64x3_nt_align8>(T1::Para… |
+|      0.7 |          246079 |        29 |    8485.5 |    8384.0 |     8160 |     9344 |       358.8 | void at::native::vectorized_gather_kernel<(int)16, long>(char *, char *, T2 *, int, long, long, lon… |
+|      0.6 |          214655 |        14 |   15332.5 |   15456.0 |    13888 |    16352 |       794.6 | _rmsnorm_dot                                                                                         |
+|      0.6 |          211583 |        28 |    7556.5 |    7552.0 |     7424 |     7680 |        61.4 | void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::n… |
+|      0.5 |          177470 |        59 |    3008.0 |     863.0 |      704 |     9600 |      2395.0 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<c10::BFloat16>, std:… |
+|      0.4 |          152030 |        14 |   10859.3 |   10863.5 |    10624 |    11200 |       134.9 | _rmsnorm_dual_quant                                                                                  |
+|      0.4 |          151871 |        14 |   10847.9 |   10848.0 |    10304 |    11168 |       231.0 | _rmsnorm_backward                                                                                    |
+|      0.3 |          124381 |       175 |     710.7 |     672.0 |      640 |     1376 |       116.0 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<int>, std::array<cha… |
+|      0.3 |          118688 |        14 |    8477.7 |    8448.0 |     8384 |     8640 |        80.8 | _inverse_rms                                                                                         |
+|      0.3 |          111872 |         4 |   27968.0 |   31872.0 |      896 |    47232 |     19642.5 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, floa… |
+|      0.3 |          104734 |        49 |    2137.4 |    2144.0 |     1952 |     2528 |       110.6 | void fp8gemm::weight_quant::persistent_quantize<(int)8, (int)2, (bool)1, (bool)1, (int)32>(fp8gemm:… |
+|      0.3 |           99135 |         7 |   14162.1 |   14271.0 |    13120 |    16160 |      1023.6 | void flash::flash_bwd_dot_do_o_kernel<(bool)1, Flash_bwd_kernel_traits<(int)64, (int)64, (int)128, … |
+|      0.3 |           93824 |        42 |    2233.9 |    2240.0 |     2176 |     2304 |        42.5 | void at::native::<unnamed>::distribution_elementwise_grid_stride_kernel<float, (int)4, void at::nat… |
+|      0.2 |           93184 |        11 |    8471.3 |    1088.0 |      960 |    30976 |     11006.8 | void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::n… |
+|      0.2 |           78528 |        14 |    5609.1 |    5488.0 |     5408 |     6048 |       206.4 | void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::n… |
+|      0.2 |           73887 |         7 |   10555.3 |   10464.0 |    10368 |    10880 |       191.6 | void flash::flash_bwd_convert_dq_kernel<Flash_bwd_kernel_traits<(int)64, (int)64, (int)128, (int)8,… |
+|      0.1 |           40031 |         1 |   40031.0 |   40031.0 |    40031 |    40031 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<float>, std::arr… |
+|      0.1 |           29184 |         1 |   29184.0 |   29184.0 |    29184 |    29184 |         0.0 | void at::native::<unnamed>::sum_and_scatter<c10::BFloat16, long>(const T2 *, T1 *, long, const T2 *… |
+|      0.1 |           28255 |         1 |   28255.0 |   28255.0 |    28255 |    28255 |         0.0 | void at::native::reduce_kernel<(int)128, (int)4, at::native::ReduceOp<float, at::native::func_wrapp… |
+|      0.1 |           28159 |         1 |   28159.0 |   28159.0 |    28159 |    28159 |         0.0 | void at::native::<unnamed>::compute_grad_weight<c10::BFloat16, long>(const T2 *, const T1 *, const … |
+|      0.1 |           26144 |         1 |   26144.0 |   26144.0 |    26144 |    26144 |         0.0 | void at::native::<unnamed>::nll_loss_backward_reduce_cuda_kernel_2d<float, long>(T1 *, const T1 *, … |
+|      0.1 |           20896 |         1 |   20896.0 |   20896.0 |    20896 |    20896 |         0.0 | void at::native::<unnamed>::distribution_elementwise_grid_stride_kernel<float, (int)4, void at::nat… |
+|      0.0 |           18368 |         2 |    9184.0 |    9184.0 |      832 |    17536 |     11811.5 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::AUnaryFunctor<float, float, floa… |
+|      0.0 |           16960 |         1 |   16960.0 |   16960.0 |    16960 |    16960 |         0.0 | void at::native::<unnamed>::nll_loss_forward_reduce_cuda_kernel_2d<float, float, long>(T1 *, T1 *, … |
+|      0.0 |           16416 |         7 |    2345.1 |    2272.0 |     2240 |     2496 |       113.5 | void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, __nv_bfloat16, __nv_bfloat16, float, __nv… |
+|      0.0 |           16288 |         1 |   16288.0 |   16288.0 |    16288 |    16288 |         0.0 | void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::n… |
+|      0.0 |           15968 |         1 |   15968.0 |   15968.0 |    15968 |    15968 |         0.0 | void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<float, at::native::func_wrapp… |
+|      0.0 |           15616 |         7 |    2230.9 |    2240.0 |     2208 |     2272 |        24.2 | void at::native::<unnamed>::distribution_elementwise_grid_stride_kernel<float, (int)4, void at::nat… |
+|      0.0 |           13055 |         1 |   13055.0 |   13055.0 |    13055 |    13055 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, void at::native::<unnamed>::pow_tensor_scala… |
+|      0.0 |           12096 |         2 |    6048.0 |    6048.0 |     5856 |     6240 |       271.5 | void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortOnesweepKernel<at_cuda_detail::cub::de… |
+|      0.0 |           11264 |         7 |    1609.1 |    1536.0 |     1504 |     1984 |       171.0 | void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl<at::native::… |
+|      0.0 |            9280 |        14 |     662.9 |     672.0 |      640 |      672 |        15.0 | void <unnamed>::elementwise_kernel_with_index<int, at::native::arange_cuda_out(const c10::Scalar &,… |
+|      0.0 |            9120 |         7 |    1302.9 |    1248.0 |     1216 |     1440 |        95.5 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::cos_kernel_cuda(at::TensorIterat… |
+|      0.0 |            9056 |         7 |    1293.7 |    1248.0 |     1216 |     1440 |        92.1 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::sin_kernel_cuda(at::TensorIterat… |
+|      0.0 |            7648 |         1 |    7648.0 |    7648.0 |     7648 |     7648 |         0.0 | void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<float, at::native::MeanOps<fl… |
+|      0.0 |            6080 |         7 |     868.6 |     864.0 |      832 |      928 |        28.8 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::neg_kernel_cuda(at::TensorIterat… |
+|      0.0 |            6048 |         7 |     864.0 |     864.0 |      832 |      960 |        45.3 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::BUnaryFunctor<float, float, floa… |
+|      0.0 |            4992 |         7 |     713.1 |     704.0 |      672 |      736 |        24.2 | void at::native::vectorized_elementwise_kernel<(int)2, at::native::FillFunctor<double>, std::array<… |
+|      0.0 |            3904 |         1 |    3904.0 |    3904.0 |     3904 |     3904 |         0.0 | void at_cuda_detail::cub::detail::unique_by_key::DeviceUniqueByKeySweepKernel<at_cuda_detail::cub::… |
+|      0.0 |            3136 |         1 |    3136.0 |    3136.0 |     3136 |     3136 |         0.0 | void at::native::_scatter_gather_elementwise_kernel<(int)128, (int)8, void at::native::_cuda_scatte… |
+|      0.0 |            2400 |         1 |    2400.0 |    2400.0 |     2400 |     2400 |         0.0 | void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<long>, std::array<char *, … |
+|      0.0 |            2208 |         1 |    2208.0 |    2208.0 |     2208 |     2208 |         0.0 | void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortHistogramKernel<at_cuda_detail::cub::d… |
+|      0.0 |            2016 |         1 |    2016.0 |    2016.0 |     2016 |     2016 |         0.0 | void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_… |
+|      0.0 |            1952 |         1 |    1952.0 |    1952.0 |     1952 |     1952 |         0.0 | void compute_cuda_kernel<int>(const T1 *, const long *, T1 *, long, long)                            |
+|      0.0 |            1504 |         1 |    1504.0 |    1504.0 |     1504 |     1504 |         0.0 | void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<bool, at::native::func_wrappe… |
+|      0.0 |            1408 |         2 |     704.0 |     704.0 |      704 |      704 |         0.0 | void at_cuda_detail::cub::detail::scan::DeviceScanInitKernel<at_cuda_detail::cub::ScanTileState<lon… |
+|      0.0 |            1344 |         2 |     672.0 |     672.0 |      640 |      704 |        45.3 | void <unnamed>::elementwise_kernel_with_index<int, at::native::arange_cuda_out(const c10::Scalar &,… |
+|      0.0 |            1152 |         1 |    1152.0 |    1152.0 |     1152 |     1152 |         0.0 | void at::native::<unnamed>::krn_partials_per_segment<long>(T1 *, const T1 *, const long *, long)     |
+|      0.0 |            1120 |         1 |    1120.0 |    1120.0 |     1120 |     1120 |         0.0 | void at::native::<unnamed>::krn_partial_segment_offset<long>(T1 *, const T1 *, const T1 *, const T1… |
+|      0.0 |            1120 |         1 |    1120.0 |    1120.0 |     1120 |     1120 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, void at::native::<unnamed>::pow_tensor_scala… |
+|      0.0 |            1120 |         1 |    1120.0 |    1120.0 |     1120 |     1120 |         0.0 | void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_… |
+|      0.0 |            1088 |         1 |    1088.0 |    1088.0 |     1088 |     1088 |         0.0 | void at::native::roll_cuda_kernel<long>(const T1 *, T1 *, long, long, long, long, long, long)        |
+|      0.0 |            1056 |         1 |    1056.0 |    1056.0 |     1056 |     1056 |         0.0 | void at::native::<unnamed>::distribution_elementwise_grid_stride_kernel<unsigned int, (int)4, void … |
+|      0.0 |            1024 |         1 |    1024.0 |    1024.0 |     1024 |     1024 |         0.0 | void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<int>, std::array<char *, (… |
+|      0.0 |            1024 |         1 |    1024.0 |    1024.0 |     1024 |     1024 |         0.0 | void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIterator… |
+|      0.0 |            1024 |         1 |    1024.0 |    1024.0 |     1024 |     1024 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::rsqrt_kernel_cuda(at::TensorIter… |
+|      0.0 |             928 |         1 |     928.0 |     928.0 |      928 |      928 |         0.0 | void at::native::<unnamed>::compute_num_of_partial_segments<long>(const T1 *, const T1 *, const lon… |
+|      0.0 |             928 |         1 |     928.0 |     928.0 |      928 |      928 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, void at::native::compare_scalar_kernel<int>(… |
+|      0.0 |             896 |         1 |     896.0 |     896.0 |      896 |      896 |         0.0 | void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortExclusiveSumKernel<at_cuda_detail::cub… |
+|      0.0 |             832 |         1 |     832.0 |     832.0 |      832 |      832 |         0.0 | void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctorOnSelf_add<float>, st… |
+|      0.0 |             704 |         1 |     704.0 |     704.0 |      704 |      704 |         0.0 | void at_cuda_detail::cub::detail::scan::DeviceCompactInitKernel<at_cuda_detail::cub::ScanTileState<… |
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+

@@ -14,8 +14,14 @@ from experiments.tk_mxfp8_gemm import Library as GemmLibrary
 from experiments.tk_mxfp8_linear import MXFP8Linear
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
+from experiments.tk_mxfp8_swiglu_dgrad import SwiGLUDgradLibrary
 from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
-from experiments.tk_rmsnorm import RMSNormBackwardPlan, RMSNormDualQuantPlan
+from experiments.tk_rmsnorm import (
+    FusedAddRMSNormBackwardPlan,
+    FusedAddRMSNormPlan,
+    RMSNormBackwardPlan,
+    RMSNormDualQuantPlan,
+)
 from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 
@@ -35,44 +41,86 @@ class RMSNorm(nn.Module):
         return (x_fp32 * inverse * self.weight.float()).to(torch.bfloat16)
 
 
+class _FusedAddRMSNormBF16(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, residual, factor, eps):
+        plan = FusedAddRMSNormPlan(
+            x,
+            residual,
+            factor,
+            eps=eps,
+            y_mode="bf16",
+        )
+        inverse_rms, _, hidden, _, _, _, _ = plan()
+        ctx.save_for_backward(x, residual, factor, inverse_rms)
+        return hidden
+
+    @staticmethod
+    def backward(ctx, dy):
+        x, residual, factor, inverse_rms = ctx.saved_tensors
+        plan = FusedAddRMSNormBackwardPlan(
+            dy.contiguous().to(torch.bfloat16),
+            x,
+            residual,
+            factor,
+            inverse_rms,
+        )
+        dx, dresidual, factor_grad = plan()
+        return dx, dresidual, factor_grad.bfloat16(), None
+
+
 class RotaryEmbedding(nn.Module):
-    """Torch compatibility RoPE for packed variable-length sequences."""
+    """FLA fused interleaved RoPE for packed variable-length sequences."""
 
     def __init__(self, head_dim, max_seq_len, theta=10000.0, device=None):
         super().__init__()
         if head_dim % 2:
             raise ValueError("head_dim must be even")
-        positions = torch.arange(max_seq_len, dtype=torch.float32, device=device)
-        frequencies = torch.pow(
-            theta,
-            -torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
-            / head_dim,
-        )
-        angles = torch.outer(positions, frequencies)
-        self.register_buffer("cos", angles.cos().bfloat16()[None, :, :], persistent=False)
-        self.register_buffer("sin", angles.sin().bfloat16()[None, :, :], persistent=False)
+        from fla.modules.rotary import RotaryEmbedding as FLARotaryEmbedding
 
-    def forward(self, x, position_ids):
-        cos = self.cos[0].index_select(0, position_ids)[:, None, :]
-        sin = self.sin[0].index_select(0, position_ids)[:, None, :]
-        even = x[..., 0::2]
-        odd = x[..., 1::2]
-        return torch.stack(
-            (even * cos - odd * sin, even * sin + odd * cos), dim=-1
-        ).flatten(-2)
+        self.max_seq_len = max_seq_len
+        self._rope = FLARotaryEmbedding(
+            dim=head_dim,
+            base=theta,
+            interleaved=True,
+            pos_idx_in_fp32=True,
+            device=device,
+        )
+
+    def forward(self, q, k, cu_seqlens, max_seqlen):
+        q, k = self._rope(
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            cu_seqlens=cu_seqlens,
+            # FLA varlen requires its cache to cover the packed input extent.
+            max_seqlen=max(max_seqlen, q.shape[0]),
+        )
+        return q.squeeze(0), k.squeeze(0)
 
 
 class _QKVForwardState:
     def __init__(
         self,
         x,
+        residual_delta,
         factor,
         weights,
         scales,
         config,
         raster_group,
     ):
-        self.norm = RMSNormDualQuantPlan(x, factor)
+        self.x = x
+        self.residual_delta = residual_delta
+        if residual_delta is None:
+            self.norm = RMSNormDualQuantPlan(x, factor)
+        else:
+            self.norm = FusedAddRMSNormPlan(
+                x,
+                residual_delta,
+                factor,
+                write_sum=True,
+                y_mode="mxfp8",
+            )
         self.q = GemmLibrary().plan(
             self.norm.row_fp8,
             weights[0],
@@ -99,17 +147,21 @@ class _QKVForwardState:
         )
 
     def __call__(self):
+        residual_out = self.x
         self.norm()
-        return self.q(), self.k(), self.v()
+        if self.residual_delta is not None:
+            residual_out = self.norm.sum_out
+        return self.q(), self.k(), self.v(), residual_out
 
 
 class _PrenormQKV(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, factor, qw, kw, vw, module):
+    def forward(ctx, x, residual_delta, factor, qw, kw, vw, module):
         module._sync_if_needed()
-        state = module._forward_state(x, factor)
-        q, k, v = state()
+        state = module._forward_state(x, residual_delta, factor)
+        q, k, v, residual_out = state()
         ctx.module = module
+        ctx.residual_delta = residual_delta
         ctx.save_for_backward(
             x,
             factor,
@@ -126,10 +178,10 @@ class _PrenormQKV(torch.autograd.Function):
             state.norm.column_scale,
             state.norm.inverse_rms,
         )
-        return q, k, v
+        return q, k, v, residual_out
 
     @staticmethod
-    def backward(ctx, dq, dk, dv):
+    def backward(ctx, dq, dk, dv, dresidual_out):
         (
             x,
             factor,
@@ -147,42 +199,71 @@ class _PrenormQKV(torch.autograd.Function):
             inverse_rms,
         ) = ctx.saved_tensors
         module = ctx.module
-        dx_parts = []
+        quantizers = []
         weight_grads = []
-        for dy, weight, weight_scale in [
-            (dq, q_fp8, q_scale),
-            (dk, k_fp8, k_scale),
-            (dv, v_fp8, v_scale),
-        ]:
+        for dy in [dq, dk, dv]:
             dy = dy.contiguous().to(torch.bfloat16)
-            quantize = SiluBwdQuantizeLibrary().plan_direct(
-                dy, transpose=True
+            quantizers.append(
+                SiluBwdQuantizeLibrary().plan_direct(dy, transpose=True)
             )
-            dx_part = DgradLibrary().plan(
-                quantize.row_fp8,
-                weight,
-                quantize.row_scale,
-                weight_scale,
-                config=module.dx_config,
-                raster_group=module.raster_group,
+        pair_dx = SwiGLUDgradLibrary().plan(
+            quantizers[0].row_fp8,
+            quantizers[1].row_fp8,
+            q_fp8,
+            k_fp8,
+            quantizers[0].row_scale,
+            quantizers[1].row_scale,
+            q_scale,
+            k_scale,
+            config=module.dx_config,
+            raster_group=module.raster_group,
+        )
+        v_dx = DgradLibrary().plan(
+            quantizers[2].row_fp8,
+            v_fp8,
+            quantizers[2].row_scale,
+            v_scale,
+            config=module.dx_config,
+            raster_group=module.raster_group,
+        )
+        for quantize, weight_scale in [
+            (quantizers[0], q_scale),
+            (quantizers[1], k_scale),
+            (quantizers[2], v_scale),
+        ]:
+            weight_grads.append(
+                WgradLibrary().plan(
+                    quantize.column_fp8,
+                    x_column,
+                    quantize.column_scale,
+                    x_column_scale,
+                    config=module.dw_config,
+                    raster_group=module.raster_group,
+                )
             )
-            dw_part = WgradLibrary().plan(
-                quantize.column_fp8,
-                x_column,
-                quantize.column_scale,
-                x_column_scale,
-                config=module.dw_config,
-                raster_group=module.raster_group,
-            )
+        for quantize in quantizers:
             quantize()
-            dx_parts.append(dx_part())
-            weight_grads.append(dw_part())
-        dx_norm = torch.add(dx_parts[0], dx_parts[1])
-        dx_norm = torch.add(dx_norm, dx_parts[2])
-        norm_backward = RMSNormBackwardPlan(dx_norm, x, factor, inverse_rms)
-        dx, factor_grad = norm_backward()
+        dx_norm = torch.add(pair_dx(), v_dx())
+        weight_grads = [plan() for plan in weight_grads]
+        if ctx.residual_delta is None:
+            norm_backward = RMSNormBackwardPlan(dx_norm, x, factor, inverse_rms)
+            dx, factor_grad = norm_backward()
+            if dresidual_out is not None:
+                dx = torch.add(dx, dresidual_out)
+            dresidual_delta = None
+        else:
+            norm_backward = FusedAddRMSNormBackwardPlan(
+                dx_norm,
+                x,
+                ctx.residual_delta,
+                factor,
+                inverse_rms,
+                dsum=dresidual_out,
+            )
+            dx, dresidual_delta, factor_grad = norm_backward()
         return (
             dx,
+            dresidual_delta,
             factor_grad.bfloat16(),
             weight_grads[0].float(),
             weight_grads[1].float(),
@@ -201,8 +282,8 @@ class FP8Attention(nn.Module):
         max_seq_len,
         *,
         qkv_forward_config=8,
-        dx_config=12,
-        dw_config=12,
+        dx_config=6,
+        dw_config=11,
         raster_group=13,
         attention_window=-1,
         device=None,
@@ -241,14 +322,12 @@ class FP8Attention(nn.Module):
                 torch.empty(0, dtype=torch.uint8, device=device),
                 persistent=False,
             )
-        self.out_proj = MXFP8Linear(
+        self.out_proj = nn.Linear(
             d_model,
             d_model,
+            bias=False,
             device=device,
-            forward_config=qkv_forward_config,
-            dx_config=dx_config,
-            dw_config=dw_config,
-            raster_group=raster_group,
+            dtype=torch.bfloat16,
         )
         self.rope = RotaryEmbedding(
             self.head_dim, max_seq_len, device=device
@@ -270,7 +349,6 @@ class FP8Attention(nn.Module):
             self._q_fp8, self._q_scale = quantize_weight(self.q_weight)
             self._k_fp8, self._k_scale = quantize_weight(self.k_weight)
             self._v_fp8, self._v_scale = quantize_weight(self.v_weight)
-        self.out_proj.refresh_fp8_weight()
         self._synced_versions = (
             self.q_weight._version,
             self.k_weight._version,
@@ -282,7 +360,6 @@ class FP8Attention(nn.Module):
 
     def mark_fp8_dirty(self):
         self._fp8_dirty = True
-        self.out_proj.mark_fp8_dirty()
         return self
 
     def _sync_if_needed(self):
@@ -294,9 +371,10 @@ class FP8Attention(nn.Module):
         if self._fp8_dirty or self._synced_versions != versions:
             self.refresh_fp8_weights()
 
-    def _forward_state(self, x, factor):
+    def _forward_state(self, x, residual_delta, factor):
         key = (
             x.data_ptr(),
+            0 if residual_delta is None else residual_delta.data_ptr(),
             factor.data_ptr(),
             tuple(x.shape),
             self._q_fp8.data_ptr(),
@@ -309,6 +387,7 @@ class FP8Attention(nn.Module):
         if state is None:
             state = _QKVForwardState(
                 x,
+                residual_delta,
                 factor,
                 (self._q_fp8, self._k_fp8, self._v_fp8),
                 (self._q_scale, self._k_scale, self._v_scale),
@@ -318,9 +397,16 @@ class FP8Attention(nn.Module):
             self._forward_states = {key: state}
         return state
 
-    def forward(self, x, cu_seqlens, max_seqlen, position_ids):
-        q, k, v = _PrenormQKV.apply(
+    def forward(
+        self,
+        x,
+        cu_seqlens,
+        max_seqlen,
+        residual_delta=None,
+    ):
+        q, k, v, residual_out = _PrenormQKV.apply(
             x,
+            residual_delta,
             self.norm_weight,
             self.q_weight,
             self.k_weight,
@@ -328,8 +414,12 @@ class FP8Attention(nn.Module):
             self,
         )
         shape = (q.shape[0], self.n_heads, self.head_dim)
-        q = self.rope(q.reshape(shape), position_ids)
-        k = self.rope(k.reshape(shape), position_ids)
+        q, k = self.rope(
+            q.reshape(shape),
+            k.reshape(shape),
+            cu_seqlens,
+            max_seqlen,
+        )
         v = v.reshape(shape)
         window = (
             (self.attention_window, -1)
@@ -347,13 +437,14 @@ class FP8Attention(nn.Module):
             causal=True,
             window_size=window,
         )
-        return self.out_proj(attended.reshape(x.shape))
+        return self.out_proj(attended.reshape(x.shape)), residual_out
 
 
 class _GateUpForwardState:
     def __init__(
         self,
         x,
+        residual_delta,
         factor,
         gate_fp8,
         gate_scale,
@@ -362,7 +453,13 @@ class _GateUpForwardState:
         forward_config,
         raster_group,
     ):
-        self.norm = RMSNormDualQuantPlan(x, factor)
+        self.norm = FusedAddRMSNormPlan(
+            x,
+            residual_delta,
+            factor,
+            write_sum=True,
+            y_mode="mxfp8",
+        )
         shape = (x.shape[0], gate_fp8.shape[0])
         self.gate_linear = torch.empty(
             shape, device=x.device, dtype=torch.bfloat16
@@ -383,16 +480,26 @@ class _GateUpForwardState:
 
     def __call__(self):
         self.norm()
-        return self.forward()
+        return self.forward(), self.norm.sum_out
 
 
 class _PrenormGateUp(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, factor, gate_weight, up_weight, module):
+    def forward(
+        ctx,
+        x,
+        residual_delta,
+        factor,
+        gate_weight,
+        up_weight,
+        module,
+    ):
         module._sync_if_needed()
-        state = module._forward_state(x, factor)
-        hidden = state()
+        state = module._forward_state(x, residual_delta, factor)
+        hidden, residual_out = state()
         ctx.module = module
+        ctx.x = x
+        ctx.residual_delta = residual_delta
         ctx.save_for_backward(
             x,
             factor,
@@ -408,10 +515,10 @@ class _PrenormGateUp(torch.autograd.Function):
             state.norm.column_scale,
             state.norm.inverse_rms,
         )
-        return hidden
+        return hidden, residual_out
 
     @staticmethod
-    def backward(ctx, dy):
+    def backward(ctx, dy, dresidual_out):
         (
             x,
             factor,
@@ -444,10 +551,18 @@ class _PrenormGateUp(torch.autograd.Function):
             raster_group=module.raster_group,
         )
         dx_norm, gate_grad, up_grad = fused()
-        norm_backward = RMSNormBackwardPlan(dx_norm, x, factor, inverse_rms)
-        dx, factor_grad = norm_backward()
+        norm_backward = FusedAddRMSNormBackwardPlan(
+            dx_norm,
+            ctx.x,
+            ctx.residual_delta,
+            factor,
+            inverse_rms,
+            dsum=dresidual_out,
+        )
+        dx, dresidual_delta, factor_grad = norm_backward()
         return (
             dx,
+            dresidual_delta,
             factor_grad.bfloat16(),
             gate_grad.float(),
             up_grad.float(),
@@ -466,7 +581,7 @@ class PrenormSwiGLU(nn.Module):
         device=None,
         forward_config=1,
         dx_config=5,
-        wgrad_config=6,
+        wgrad_config=12,
         down_forward_config=70,
         down_dx_config=12,
         down_dw_config=12,
@@ -546,9 +661,10 @@ class PrenormSwiGLU(nn.Module):
         if self._fp8_dirty or self._synced_versions != versions:
             self.refresh_fp8_weights()
 
-    def _forward_state(self, x, factor):
+    def _forward_state(self, x, residual_delta, factor):
         key = (
             x.data_ptr(),
+            residual_delta.data_ptr(),
             factor.data_ptr(),
             tuple(x.shape),
             self._gate_fp8.data_ptr(),
@@ -560,6 +676,7 @@ class PrenormSwiGLU(nn.Module):
         if state is None:
             state = _GateUpForwardState(
                 x,
+                residual_delta,
                 factor,
                 self._gate_fp8,
                 self._gate_scale,
@@ -571,15 +688,16 @@ class PrenormSwiGLU(nn.Module):
             self._forward_states = {key: state}
         return state
 
-    def forward(self, x):
-        hidden = _PrenormGateUp.apply(
+    def forward(self, x, residual_delta):
+        hidden, residual_out = _PrenormGateUp.apply(
             x,
+            residual_delta,
             self.norm_weight,
             self.gate_weight,
             self.up_weight,
             self,
         )
-        return self.down_proj(hidden)
+        return self.down_proj(hidden), residual_out
 
 
 class DecoderBlock(nn.Module):
@@ -591,11 +709,11 @@ class DecoderBlock(nn.Module):
         max_seq_len,
         *,
         qkv_forward_config=8,
-        qkv_dx_config=12,
-        qkv_dw_config=12,
+        qkv_dx_config=6,
+        qkv_dw_config=11,
         swiglu_forward_config=1,
         swiglu_dx_config=5,
-        swiglu_dw_config=6,
+        swiglu_dw_config=12,
         attention_window=-1,
         device=None,
         down_forward_config=70,
@@ -625,19 +743,29 @@ class DecoderBlock(nn.Module):
             down_dw_config=down_dw_config,
         )
 
-    def forward(self, x, cu_seqlens, max_seqlen, position_ids):
-        x = x + self.attention(
+    def forward(
+        self,
+        x,
+        cu_seqlens,
+        max_seqlen,
+        residual_delta=None,
+    ):
+        attention_delta, x = self.attention(
             x,
             cu_seqlens,
             max_seqlen,
-            position_ids,
+            residual_delta=residual_delta,
         )
-        x = x + self.mlp(x)
-        return x
+        mlp_delta, x = self.mlp(x, attention_delta)
+        return x, mlp_delta
 
 
 class FP8DecoderTransformer(nn.Module):
-    """Causal decoder with prenorm attention and pure-MXFP8 SwiGLU FFN."""
+    """Causal decoder with prenorm attention and pure-MXFP8 SwiGLU FFN.
+
+    ``forward`` materializes logits for inference. ``forward_loss`` is the
+    training path and uses FLA fused linear cross-entropy by default.
+    """
 
     def __init__(
         self,
@@ -649,11 +777,11 @@ class FP8DecoderTransformer(nn.Module):
         context_length,
         *,
         qkv_forward_config=8,
-        qkv_dx_config=12,
-        qkv_dw_config=12,
+        qkv_dx_config=6,
+        qkv_dw_config=11,
         swiglu_forward_config=1,
         swiglu_dx_config=5,
-        swiglu_dw_config=6,
+        swiglu_dw_config=12,
         attention_window=-1,
         device=None,
         down_forward_config=70,
@@ -700,21 +828,81 @@ class FP8DecoderTransformer(nn.Module):
         if isinstance(module, RMSNorm):
             nn.init.ones_(module.weight)
 
-    @staticmethod
-    def _position_ids(cu_seqlens, total_tokens):
-        lengths = cu_seqlens[1:] - cu_seqlens[:-1]
-        offsets = torch.repeat_interleave(cu_seqlens[:-1], lengths)
-        return torch.arange(total_tokens, device=cu_seqlens.device) - offsets
-
-    def forward(self, tokens, cu_seqlens, max_seqlen):
+    def forward_hidden(
+        self,
+        tokens,
+        cu_seqlens,
+        max_seqlen,
+        *,
+        position_ids=None,
+    ):
+        del position_ids
         if cu_seqlens.dtype != torch.int32:
             cu_seqlens = cu_seqlens.to(torch.int32)
-        position_ids = self._position_ids(cu_seqlens, tokens.numel())
         x = F.embedding(tokens, self.embedding)
+        residual_delta = None
         for block in self.blocks:
-            x = block(x, cu_seqlens, max_seqlen, position_ids)
-        hidden = self.final_norm(x)
+            x, residual_delta = block(
+                x,
+                cu_seqlens,
+                max_seqlen,
+                residual_delta=residual_delta,
+            )
+        return _FusedAddRMSNormBF16.apply(
+            x,
+            residual_delta,
+            self.final_norm.weight,
+            self.final_norm.eps,
+        )
+
+    def forward(self, tokens, cu_seqlens, max_seqlen):
+        hidden = self.forward_hidden(tokens, cu_seqlens, max_seqlen)
         return F.linear(hidden, self.embedding)
+
+    def forward_loss(
+        self,
+        tokens,
+        targets,
+        cu_seqlens,
+        max_seqlen,
+        *,
+        position_ids=None,
+        fused_linear_ce=True,
+        reduction="mean",
+        ignore_index=-100,
+        num_chunks=2,
+    ):
+        """Return training loss, optionally fusing lm head and cross-entropy."""
+        if targets.numel() != tokens.numel():
+            raise ValueError("targets and tokens must contain the same number of elements")
+        hidden = self.forward_hidden(
+            tokens,
+            cu_seqlens,
+            max_seqlen,
+            position_ids=position_ids,
+        )
+        if fused_linear_ce:
+            if reduction not in ("mean", "sum"):
+                raise ValueError("FLA fused linear CE supports mean or sum reduction")
+            from fla.modules.fused_linear_cross_entropy import (
+                fused_linear_cross_entropy_loss,
+            )
+
+            return fused_linear_cross_entropy_loss(
+                hidden,
+                targets,
+                self.embedding,
+                ignore_index=ignore_index,
+                reduction=reduction,
+                num_chunks=num_chunks,
+            )
+        logits = F.linear(hidden, self.embedding)
+        return F.cross_entropy(
+            logits.float(),
+            targets,
+            ignore_index=ignore_index,
+            reduction=reduction,
+        )
 
     def refresh_fp8_weights(self):
         for module in self.modules():

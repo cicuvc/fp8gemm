@@ -329,7 +329,6 @@ class SiluBwdDirectQuantizePlan:
         }
 
     def __call__(self):
-        self.column_scale.zero_()
         status = self.owner.lib.tk_silu_bwd_q_launch(
             self.handle,
             torch.cuda.current_stream(self.x.device).cuda_stream,

@@ -157,11 +157,12 @@ def _rmsnorm_dual_quant(
         tl.trans(column_q_t),
         mask=col_mask[None, :],
     )
-    scale_shift = 8 * (row_block % 4)
-    column_values = tl.reshape(column_s.to(tl.uint32), (BLOCK_K,))
-    tl.atomic_or(
-        column_scale + (row_block // 4) * SP + cols,
-        column_values << scale_shift,
+    column_values = tl.reshape(column_s, (BLOCK_K,))
+    tl.store(
+        column_scale
+        + ((row_block // 4) * SP + cols) * 4
+        + (row_block % 4),
+        column_values,
         mask=cols < SP,
     )
 
@@ -205,7 +206,6 @@ class RMSNormDualQuantPlan:
         )
 
     def __call__(self):
-        self.column_scale.zero_()
         _inverse_rms[(self.m,)](
             self.x,
             self.inverse_rms,
@@ -222,7 +222,7 @@ class RMSNormDualQuantPlan:
             self.row_fp8,
             self.row_scale,
             self.column_fp8,
-            self.column_scale,
+            self.column_scale.view(torch.uint8),
             self.m,
             self.k,
             self.mp,
@@ -561,10 +561,12 @@ def _add_rmsnorm_output(
             tl.trans(column_q_t),
             mask=col_mask[None, :],
         )
-        column_values = tl.reshape(column_s.to(tl.uint32), (BLOCK_K,))
-        tl.atomic_or(
-            column_scale + (row_block // 4) * SP + cols,
-            column_values << (8 * (row_block % 4)),
+        column_values = tl.reshape(column_s, (BLOCK_K,))
+        tl.store(
+            column_scale
+            + ((row_block // 4) * SP + cols) * 4
+            + (row_block % 4),
+            column_values,
             mask=cols < SP,
         )
 
@@ -659,8 +661,6 @@ class FusedAddRMSNormPlan:
             BLOCK_K=triton.next_power_of_2(self.k),
         )
         if self.y_mode != self.Y_NONE:
-            if self.y_mode == self.Y_MXFP8:
-                self.column_scale.zero_()
             factor = self.factor if self.factor is not None else self.x
             factor_stride = self.factor.stride(0) if self.factor is not None else 0
             y_ptr = self.y_bf16 if self.y_bf16 is not None else self.x
@@ -668,7 +668,9 @@ class FusedAddRMSNormPlan:
             row_scale_ptr = self.row_scale if self.row_scale is not None else self.x
             column_ptr = self.column_fp8 if self.column_fp8 is not None else self.x
             column_scale_ptr = (
-                self.column_scale if self.column_scale is not None else self.x
+                self.column_scale.view(torch.uint8)
+                if self.column_scale is not None
+                else self.x
             )
             _add_rmsnorm_output[
                 (self.mp // 32, triton.cdiv(self.k, 128))
@@ -764,6 +766,7 @@ def _fused_add_rmsnorm_backward(
     factor,
     inverse_rms,
     dot,
+    dsum,
     dx,
     factor_partial,
     M,
@@ -774,6 +777,7 @@ def _fused_add_rmsnorm_backward(
     dx_stride,
     factor_stride,
     HAS_FACTOR: tl.constexpr,
+    HAS_DSUM: tl.constexpr,
     BLOCK_K: tl.constexpr,
 ):
     row_block = tl.program_id(0)
@@ -819,6 +823,12 @@ def _fused_add_rmsnorm_backward(
     grad_sum = inverse[:, None] * (
         dy_scaled - correction[:, None] * summed
     )
+    if HAS_DSUM:
+        grad_sum += tl.load(
+            dsum + rows[:, None] * dx_stride + cols[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
     tl.store(
         dx + rows[:, None] * dx_stride + cols[None, :],
         grad_sum.to(tl.bfloat16),
@@ -856,7 +866,7 @@ def _reduce_factor_grad_bf16(
 class FusedAddRMSNormBackwardPlan:
     """BF16 backward for ``RMSNorm(x + residual)``."""
 
-    def __init__(self, dy, x, residual, factor, inverse_rms):
+    def __init__(self, dy, x, residual, factor, inverse_rms, *, dsum=None):
         if (
             dy.shape != x.shape
             or residual.shape != x.shape
@@ -872,8 +882,15 @@ class FusedAddRMSNormBackwardPlan:
                 raise ValueError("Factor must be FP32 or BF16")
         if inverse_rms.shape != (x.shape[0],) or inverse_rms.dtype != torch.float32:
             raise ValueError("Expected FP32 inverse_rms[M]")
+        if dsum is not None and (
+            dsum.shape != x.shape
+            or dsum.dtype != torch.bfloat16
+            or not dsum.is_contiguous()
+            or dsum.device != x.device
+        ):
+            raise ValueError("Expected contiguous BF16 dsum[M,K]")
         self.dy, self.x, self.residual = dy, x, residual
-        self.factor, self.inverse_rms = factor, inverse_rms
+        self.factor, self.inverse_rms, self.dsum = factor, inverse_rms, dsum
         self.m, self.k = x.shape
         self.row_blocks = (self.m + 31) // 32
         self.dot = torch.empty(self.m, device=x.device, dtype=torch.float32)
@@ -912,6 +929,7 @@ class FusedAddRMSNormBackwardPlan:
             BLOCK_K=triton.next_power_of_2(self.k),
         )
         partial = self.factor_partial if self.factor_partial is not None else self.dot
+        dsum = self.dsum if self.dsum is not None else self.dy
         _fused_add_rmsnorm_backward[
             (self.row_blocks, triton.cdiv(self.k, 128))
         ](
@@ -921,6 +939,7 @@ class FusedAddRMSNormBackwardPlan:
             factor,
             self.inverse_rms,
             self.dot,
+            dsum,
             self.dx,
             partial,
             self.m,
@@ -931,6 +950,7 @@ class FusedAddRMSNormBackwardPlan:
             self.dx.stride(0),
             factor_stride,
             HAS_FACTOR=self.factor is not None,
+            HAS_DSUM=self.dsum is not None,
             BLOCK_K=128,
             num_warps=4,
         )

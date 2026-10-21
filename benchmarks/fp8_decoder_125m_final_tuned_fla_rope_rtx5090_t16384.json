@@ -1,0 +1,110 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "config_source": "Defaults from 3d58143:experiments/train_decoder_muon.py; vocab size from the referenced tokenizer.",
+  "attention_out_projection": "torch.nn.Linear(dtype=torch.bfloat16)",
+  "loss_backend": "fla.FusedLinearCrossEntropyLoss",
+  "config": {
+    "vocab_size": 32000,
+    "d_model": 768,
+    "n_layers": 13,
+    "n_heads": 12,
+    "mlp_hidden": 2304,
+    "context_length": 512,
+    "tokens_per_microbatch": 16384,
+    "warmup": 2,
+    "repeats": 8,
+    "fp8_peak_tflops": 419.0,
+    "no_fused_linear_ce": false,
+    "fused_ce_chunks": 2,
+    "output": "benchmarks/fp8_decoder_125m_final_tuned_fla_rope_rtx5090_t16384.json",
+    "sequence_count": 32,
+    "sequence_lengths": [
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512,
+      512
+    ],
+    "parameters": 124276992
+  },
+  "flops": {
+    "total": 12634464190464,
+    "fp8_linear": 9045201125376,
+    "bf16_o_projection": 753766760448,
+    "bf16_lm_head": 2415919104000,
+    "bf16_attention": 419577200640,
+    "bf16_total": 3589263065088
+  },
+  "method": {
+    "forward_backward": "CUDA events; fixed packed-varlen batch; zero_grad, loss, and backward included.",
+    "graph_forward_backward": "Same work with Python layer dispatch removed by CUDA Graph; position IDs are precomputed before capture.",
+    "full_step": "CUDA events; AdamW step and FP8 weight-cache refresh included.",
+    "mfu": "Useful model FLOPs divided by nominal 419 TFLOPS FP8 peak. BF16 O projection, lm head, and attention are included in the numerator, so this is conservative for mixed precision."
+  },
+  "forward_backward": {
+    "median_us": 60164.09683227539,
+    "min_us": 59710.689544677734,
+    "max_us": 199045.98999023438,
+    "samples_us": [
+      60310.176849365234,
+      59710.689544677734,
+      60505.02395629883,
+      60409.793853759766,
+      60018.01681518555,
+      199045.98999023438,
+      59922.752380371094,
+      59792.25540161133
+    ],
+    "tflops": 210.00006408616386,
+    "fp8_peak_mfu_percent": 50.119347037270614
+  },
+  "graph_forward_backward": {
+    "unavailable": "FLA fused linear cross-entropy synchronizes on the host to count valid targets and is not CUDA Graph capturable."
+  },
+  "full_step": {
+    "median_us": 65563.04168701172,
+    "min_us": 65106.14776611328,
+    "max_us": 66185.92071533203,
+    "samples_us": [
+      65492.12646484375,
+      65106.14776611328,
+      65567.19970703125,
+      65968.54400634766,
+      66185.92071533203,
+      65256.54602050781,
+      65558.88366699219,
+      65832.06176757812
+    ],
+    "tflops": 192.70710853805514,
+    "fp8_peak_mfu_percent": 45.99215000908237
+  },
+  "peak_memory_gib": 13.418835163116455
+}
