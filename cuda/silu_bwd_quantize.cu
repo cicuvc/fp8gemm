@@ -325,7 +325,8 @@ __global__ __launch_bounds__(256) void silu_bwd_quantize_kernel(Args args) {
         bool has_next=next<args.total_tiles;
         if(has_next)
             load_tile<Direct,Transposed>(
-                warp_shared+kInputs<Direct>*kTileWords,args,next,lane);
+                warp_shared+(stage^1)*kInputs<Direct>*kTileWords,
+                args,next,lane);
         if(has_next)cp_async_wait<1>();
         else cp_async_wait<0>();
         __syncwarp();
