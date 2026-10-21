@@ -3,11 +3,11 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_dgrad import RowQuantizePlan
 from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
 from experiments.tk_mxfp8_swiglu_layer import MXFP8SwiGLU
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
@@ -36,12 +36,12 @@ def test_forward_and_backward_match_explicit_component_chain():
     gate_scale = layer._gate_weight_scale
     up_fp8 = layer._up_weight_fp8
     up_scale = layer._up_weight_scale
-    quantized_x = RowQuantizePlan(x.detach())
+    quantized_x = SiluBwdQuantizeLibrary().plan_direct(x.detach())
     gate_linear = torch.empty((137, 128), device="cuda", dtype=torch.bfloat16)
     up_linear = torch.empty_like(gate_linear)
     forward = MXFP8SwiGLULibrary().plan(
-        quantized_x.out,
-        quantized_x.scales,
+        quantized_x.row_fp8,
+        quantized_x.row_scale,
         gate_fp8,
         gate_scale,
         up_fp8,

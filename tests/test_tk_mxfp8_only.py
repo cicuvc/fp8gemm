@@ -2,8 +2,9 @@
 import os
 import pytest
 import torch
-import mxtest
+from experiments.mxfp8_core import quantize_weight
 from experiments.tk_mxfp8_gemm import Library, build, OUTPUT, ROOT, CONFIGS, pack_a_scales
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_gemm import exact_operands
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
@@ -48,11 +49,14 @@ def test_tiles(library,operands,config):
 @pytest.mark.parametrize('config',[43,70,106])
 def test_graph_reuse(library,config):
     torch.manual_seed(91)
-    a,sa=mxtest.launch_row_quantize(torch.randn((777,256),device='cuda',dtype=torch.bfloat16))
-    b,sb=mxtest.launch_weight_quantize(torch.randn((384,256),device='cuda'))
-    args=[a,b,pack_a_scales(sa),sb]
+    xq=SiluBwdQuantizeLibrary().plan_direct(
+        torch.randn((777,256),device='cuda',dtype=torch.bfloat16)
+    )
+    xq()
+    b,sb=quantize_weight(torch.randn((384,256),device='cuda'))
+    args=[xq.row_fp8,b,xq.row_scale,sb]
     dual=library.plan(*args,config=config,sms=3,save_quantized=True)
-    q=torch.empty((777,384),device='cuda',dtype=a.dtype)
+    q=torch.empty((777,384),device='cuda',dtype=xq.row_fp8.dtype)
     qs=torch.empty((3,784),device='cuda',dtype=torch.int32)
     only=library.plan(*args,config=config,sms=3,save_quantized=True,save_bf16=False,
                       quantized_out=q,quantized_scales=qs)
@@ -60,10 +64,10 @@ def test_graph_reuse(library,config):
     dual();only()
     graph=torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):only()
-    saved=a.clone();a.zero_();q.view(torch.uint8).fill_(255);qs.fill_(-1)
+    saved=xq.row_fp8.clone();xq.row_fp8.zero_();q.view(torch.uint8).fill_(255);qs.fill_(-1)
     graph.replay()
     assert torch.count_nonzero(q.view(torch.uint8))==0 and torch.count_nonzero(qs)==0
-    a.copy_(saved);graph.replay()
+    xq.row_fp8.copy_(saved);graph.replay()
     torch.testing.assert_close(q.view(torch.uint8),dual.qout.view(torch.uint8),rtol=0,atol=0)
     torch.testing.assert_close(qs,dual.qscales,rtol=0,atol=0)
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
@@ -71,7 +75,7 @@ def test_graph_reuse(library,config):
     torch.cuda.current_stream().wait_stream(stream)
     torch.testing.assert_close(q.view(torch.uint8),dual.qout.view(torch.uint8),rtol=0,atol=0)
     # The returned FP8 and packed scales feed the next GEMM directly.
-    w,sw=mxtest.launch_weight_quantize(torch.randn((128,384),device='cuda'))
+    w,sw=quantize_weight(torch.randn((128,384),device='cuda'))
     actual=library.plan(q,w,qs,sw,config=70)()
     expected=library.plan(dual.qout,w,dual.qscales,sw,config=70)()
     torch.testing.assert_close(actual,expected,rtol=0,atol=0)

@@ -5,10 +5,10 @@ import math
 import torch
 from torch import nn
 
+from experiments.mxfp8_core import quantize_weight
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
-from experiments.tk_mxfp8_dgrad import RowQuantizePlan
 from experiments.tk_mxfp8_gemm import Library as GemmLibrary
-from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library as WgradLibrary
+from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
 from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 
@@ -51,20 +51,21 @@ class _BackwardState:
         dw_config,
         raster_group,
     ):
-        self.dy_row = RowQuantizePlan(dy)
-        self.dy_column = ColumnQuantizePlan(dy, transpose=True)
+        self.dy_quantize = SiluBwdQuantizeLibrary().plan_direct(
+            dy, transpose=True
+        )
         self.dx = DgradLibrary().plan(
-            self.dy_row.out,
+            self.dy_quantize.row_fp8,
             weight_fp8,
-            self.dy_row.scales,
+            self.dy_quantize.row_scale,
             weight_scale,
             config=dx_config,
             raster_group=raster_group,
         )
         self.dw = WgradLibrary().plan(
-            self.dy_column.out,
+            self.dy_quantize.column_fp8,
             hidden_column,
-            self.dy_column.scales,
+            self.dy_quantize.column_scale,
             hidden_column_scale,
             config=dw_config,
             raster_group=raster_group,
@@ -74,8 +75,7 @@ class _BackwardState:
         self.hidden_row_scale = hidden_row_scale
 
     def __call__(self):
-        self.dy_row()
-        self.dy_column()
+        self.dy_quantize()
         dx = self.dx()
         dw = self.dw()
         return dx, dw
@@ -180,10 +180,9 @@ class MXFP8DownProjection(nn.Module):
     def refresh_fp8_weight(self):
         if not self.master_weight.is_cuda:
             raise RuntimeError("MXFP8DownProjection requires CUDA")
-        import mxtest
 
         with torch.no_grad():
-            self._weight_fp8, self._weight_scale = mxtest.launch_weight_quantize(
+            self._weight_fp8, self._weight_scale = quantize_weight(
                 self.master_weight.detach()
             )
         self._synced_version = self.master_weight._version

@@ -7,14 +7,16 @@ import torch.nn.functional as F
 from flash_attn import flash_attn_varlen_func
 from torch import nn
 
-from fp8_linear import FP8Linear
-from experiments.tk_mxfp8_dgrad import Library as DgradLibrary, RowQuantizePlan
+from experiments.mxfp8_core import bind_fp8_optimizer, quantize_weight
+from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_gemm import Library as GemmLibrary
+from experiments.tk_mxfp8_linear import MXFP8Linear
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
-from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library as WgradLibrary
+from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
 from experiments.tk_rmsnorm import RMSNormBackwardPlan, RMSNormDualQuantPlan
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 
 class RMSNorm(nn.Module):
@@ -153,26 +155,26 @@ class _PrenormQKV(torch.autograd.Function):
             (dv, v_fp8, v_scale),
         ]:
             dy = dy.contiguous().to(torch.bfloat16)
-            row = RowQuantizePlan(dy)
-            column = ColumnQuantizePlan(dy, transpose=True)
+            quantize = SiluBwdQuantizeLibrary().plan_direct(
+                dy, transpose=True
+            )
             dx_part = DgradLibrary().plan(
-                row.out,
+                quantize.row_fp8,
                 weight,
-                row.scales,
+                quantize.row_scale,
                 weight_scale,
                 config=module.dx_config,
                 raster_group=module.raster_group,
             )
             dw_part = WgradLibrary().plan(
-                column.out,
+                quantize.column_fp8,
                 x_column,
-                column.scales,
+                quantize.column_scale,
                 x_column_scale,
                 config=module.dw_config,
                 raster_group=module.raster_group,
             )
-            row()
-            column()
+            quantize()
             dx_parts.append(dx_part())
             weight_grads.append(dw_part())
         dx_norm = torch.add(dx_parts[0], dx_parts[1])
@@ -239,12 +241,14 @@ class FP8Attention(nn.Module):
                 torch.empty(0, dtype=torch.uint8, device=device),
                 persistent=False,
             )
-        self.out_proj = FP8Linear(
+        self.out_proj = MXFP8Linear(
             d_model,
             d_model,
-            bias=False,
             device=device,
-            backward_backend="cuda",
+            forward_config=qkv_forward_config,
+            dx_config=dx_config,
+            dw_config=dw_config,
+            raster_group=raster_group,
         )
         self.rope = RotaryEmbedding(
             self.head_dim, max_seq_len, device=device
@@ -262,12 +266,10 @@ class FP8Attention(nn.Module):
         nn.init.ones_(self.norm_weight)
 
     def refresh_fp8_weights(self):
-        import mxtest
-
         with torch.no_grad():
-            self._q_fp8, self._q_scale = mxtest.launch_weight_quantize(self.q_weight)
-            self._k_fp8, self._k_scale = mxtest.launch_weight_quantize(self.k_weight)
-            self._v_fp8, self._v_scale = mxtest.launch_weight_quantize(self.v_weight)
+            self._q_fp8, self._q_scale = quantize_weight(self.q_weight)
+            self._k_fp8, self._k_scale = quantize_weight(self.k_weight)
+            self._v_fp8, self._v_scale = quantize_weight(self.v_weight)
         self.out_proj.refresh_fp8_weight()
         self._synced_versions = (
             self.q_weight._version,
@@ -518,13 +520,11 @@ class PrenormSwiGLU(nn.Module):
         nn.init.ones_(self.norm_weight)
 
     def refresh_fp8_weights(self):
-        import mxtest
-
         with torch.no_grad():
-            self._gate_fp8, self._gate_scale = mxtest.launch_weight_quantize(
+            self._gate_fp8, self._gate_scale = quantize_weight(
                 self.gate_weight
             )
-            self._up_fp8, self._up_scale = mxtest.launch_weight_quantize(
+            self._up_fp8, self._up_scale = quantize_weight(
                 self.up_weight
             )
         self.down_proj.refresh_fp8_weight()
@@ -724,6 +724,4 @@ class FP8DecoderTransformer(nn.Module):
         return self
 
     def bind_optimizer(self, optimizer):
-        from fp8_linear import bind_fp8_optimizer
-
         return bind_fp8_optimizer(self, optimizer)

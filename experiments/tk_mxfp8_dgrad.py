@@ -2,17 +2,13 @@
 
 Uses swapAB so both LDSM operand layouts feed QMMA directly. dY scales use
 packed per-row/N32 E8M0; W retains the forward 32x32 block scale grid.
-These standalone entry points do not change FP8Linear dispatch.
 """
 import ctypes as ct
 from pathlib import Path
 import re
 import subprocess
 import torch
-import triton
-import triton.language as tl
-import mxtest
-from experiments.tk_persistent_gemm import ROOT,FLAGS
+from experiments.mxfp8_core import ROOT,FLAGS
 
 OUTPUT=ROOT/'runs/tk_mxfp8_dgrad'
 CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
@@ -26,40 +22,6 @@ def build(output=OUTPUT):
         subprocess.run(['/usr/local/cuda/bin/nvcc',*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_mxfp8_dgrad.cu','-lcuda','-o',str(output/'libdgrad.so')],
                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=600)
-
-
-@triton.jit
-def _row_quantize(X,Q,S,M:tl.constexpr,N:tl.constexpr,SP:tl.constexpr,
-                  S0:tl.constexpr,S1:tl.constexpr):
-    row=tl.program_id(0)*32+tl.arange(0,32)
-    col=tl.program_id(1)*128+tl.arange(0,128)
-    x=tl.load(X+row[:,None]*S0+col[None,:]*S1,
-              (row[:,None]<M)&(col[None,:]<N),0)
-    q,scale=mxtest.online_scale(x)
-    tl.store(Q+row[:,None]*N+col[None,:],q,(row[:,None]<M)&(col[None,:]<N))
-    words=tl.sum(scale.to(tl.uint32)<<(8*tl.arange(0,4))[None,:],axis=1)
-    tl.store(S+tl.program_id(1)*SP+row,words,row<SP)
-
-
-class RowQuantizePlan:
-    """Standalone Triton BF16 dY -> E4M3 + forward-compatible packed row scales.
-
-    No implicit padding of the matrix. N must be a multiple of 32. Strided
-    sources are accepted. Finite-BF16 online_scale semantics are unchanged.
-    """
-    def __init__(self,x):
-        if x.ndim!=2 or min(x.shape)<=0 or x.shape[1]%32 or x.dtype!=torch.bfloat16 or not x.is_cuda:
-            raise ValueError('Expected CUDA BF16 [M,N], N multiple of 32')
-        self.x=x;m,n=x.shape;self.sp=triton.cdiv(m,16)*16
-        self.out=torch.empty((m,n),device=x.device,dtype=torch.float8_e4m3fn)
-        self.scales=torch.empty((triton.cdiv(n,128),self.sp),device=x.device,dtype=torch.int32)
-
-    def __call__(self):
-        m,n=self.x.shape
-        with torch.cuda.device(self.x.device):
-            _row_quantize[(triton.cdiv(m,32),triton.cdiv(n,128))](
-                self.x,self.out,self.scales,m,n,self.sp,*self.x.stride(),num_warps=4)
-        return self.out,self.scales
 
 
 class Library:

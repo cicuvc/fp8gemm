@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import statistics
 import subprocess
 import sys
 
@@ -13,11 +14,29 @@ import torch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-import mxtest
-from experiments.tk_mxfp8_gemm import Library, OUTPUT as BASELINE, pack_a_scales
-from experiments.retest_tk_mxfp8_tuning import measure
+from experiments.mxfp8_core import quantize_weight
+from experiments.tk_mxfp8_gemm import Library, OUTPUT as BASELINE
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 OUTPUT=ROOT/'runs/tk_movmatrix_epilogue'
+
+
+def measure(functions,reference,rounds,repeats,seed):
+    del reference
+    torch.manual_seed(seed)
+    result={}
+    for name,function in functions.items():
+        for _ in range(3):function()
+        graph=torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            for _ in range(repeats):function()
+        values=[]
+        for _ in range(rounds):
+            start=torch.cuda.Event(enable_timing=True);end=torch.cuda.Event(enable_timing=True)
+            start.record();graph.replay();end.record();end.synchronize()
+            values.append(start.elapsed_time(end)*1000/repeats)
+        result[name]={'median_us':statistics.median(values),'min_us':min(values),'max_us':max(values)}
+    return result
 
 
 def audit(binary,destination):
@@ -71,10 +90,12 @@ def main():
             (16384,4096,1024,70),(16384,1024,2048,106),
             (8192,8192,4096,70),(16384,4096,4096,70)]
     for m,n,k,cfg in shapes:
-        a,sa=mxtest.launch_row_quantize(torch.randn((m,k),device='cuda',dtype=torch.bfloat16))
-        sa=pack_a_scales(sa)
-        b,sb=mxtest.launch_weight_quantize(torch.randn((n,k),device='cuda'))
-        inputs=[a,b,sa,sb]
+        q=SiluBwdQuantizeLibrary().plan_direct(
+            torch.randn((m,k),device='cuda',dtype=torch.bfloat16)
+        )
+        q()
+        b,sb=quantize_weight(torch.randn((n,k),device='cuda'))
+        inputs=[q.row_fp8,b,q.row_scale,sb]
         baseline=old.plan(*inputs,config=cfg,save_quantized=True)
         movm=new.plan(*inputs,config=cfg,save_quantized=True)
         plain=old.plan(*inputs,config=cfg)
@@ -92,7 +113,7 @@ def main():
         args.output.write_text(json.dumps(result,indent=2)+'\n')
         print(f'{m=} {n=} {k=} c{cfg}: SHFL={base:.3f}, MOVM={new_us:.3f}, '
               f'BF16={timing["bf16"]["median_us"]:.3f} us; speedup={base/new_us:.4f}x',flush=True)
-        del baseline,movm,plain,a,b,sa,sb,inputs
+        del baseline,movm,plain,q,b,sb,inputs
         gc.collect();torch.cuda.empty_cache()
 
 

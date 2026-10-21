@@ -13,7 +13,37 @@ import torch
 import triton
 import triton.language as tl
 
-import mxtest
+
+@triton.jit
+def _u16_max(x, y):
+    return tl.inline_asm_elementwise(
+        "max.u16x2 $0, $1, $2;", "=r,r,r", [x, y], tl.uint16, True, 2
+    )
+
+
+@triton.jit
+def _online_scale(x: tl.tensor):
+    """Quantize a BF16 tile with one E8M0 scale per contiguous K32."""
+    tl.static_assert(x.dtype == tl.bfloat16)
+    rows: tl.constexpr = x.shape[0]
+    cols: tl.constexpr = x.shape[1]
+    x = tl.reshape(x, (rows, cols // 32, 32))
+    exponents = tl.inline_asm_elementwise(
+        "and.b32 $0, $1, 0x7F807F80;", "=r,r", [x], tl.uint16, True, 2
+    )
+    scale_u16 = tl.reduce(exponents, axis=-1, combine_fn=_u16_max)
+    reciprocal = tl.inline_asm_elementwise(
+        "sub.u32 $0, 0x7F007F00, $1; and.b32 $0, $0, 0x7F807F80;",
+        "=r,r",
+        [scale_u16],
+        tl.bfloat16,
+        True,
+        2,
+    )
+    quantized = tl.cast(
+        x * reciprocal[:, :, None], tl.float8e4nv
+    ).reshape(rows, cols)
+    return quantized, tl.cast(scale_u16 >> 7, tl.uint8)
 
 
 @triton.jit
@@ -85,7 +115,7 @@ def _rmsnorm_dual_quant(
         * scale_factor[None, :]
     ).to(tl.bfloat16)
 
-    row_q, row_s = mxtest.online_scale(normalized)
+    row_q, row_s = _online_scale(normalized)
     tl.store(
         row_fp8 + rows[:, None] * row_stride + cols[None, :],
         row_q,
@@ -103,7 +133,7 @@ def _rmsnorm_dual_quant(
         mask=rows < MP16,
     )
 
-    column_q_t, column_s = mxtest.online_scale(tl.trans(normalized))
+    column_q_t, column_s = _online_scale(tl.trans(normalized))
     tl.store(
         column_fp8 + rows[:, None] * column_stride + cols[None, :],
         tl.trans(column_q_t),
@@ -491,7 +521,7 @@ def _add_rmsnorm_output(
             mask=mask,
         )
     if Y_MODE == 2:
-        row_q, row_s = mxtest.online_scale(normalized_bf16)
+        row_q, row_s = _online_scale(normalized_bf16)
         tl.store(
             row_fp8 + rows[:, None] * row_stride + cols[None, :],
             row_q,
@@ -507,7 +537,7 @@ def _add_rmsnorm_output(
             row_word,
             mask=rows < MP16,
         )
-        column_q_t, column_s = mxtest.online_scale(tl.trans(normalized_bf16))
+        column_q_t, column_s = _online_scale(tl.trans(normalized_bf16))
         tl.store(
             column_fp8 + rows[:, None] * column_stride + cols[None, :],
             tl.trans(column_q_t),

@@ -3,7 +3,7 @@ import ctypes as ct
 from pathlib import Path
 import subprocess
 import torch
-from experiments.tk_persistent_gemm import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS
 
 DEFAULT_OUTPUT=ROOT/'runs/tk_weight_quantize'
 CONFIGS=[(4,2,True,32),(4,3,True,32),(8,2,True,32),(4,2,False,32),
@@ -38,8 +38,8 @@ class QuantPlan:
     """Finite FP32 weights [N,K] -> E4M3 [N,K], uint8 E8M0 [ceil(N/32),ceil(K/32)].
 
     Scale is the maximum biased FP32 exponent in each block, with no range
-    offset; e=0 represents 2^-127. Optional round_bf16 matches the existing
-    Triton preprocessing (values must remain finite after BF16 rounding).
+    offset; e=0 represents 2^-127. Optional round_bf16 matches the numerical
+    BF16 weight quantization contract (values must remain finite after rounding).
     Input columns are contiguous, row stride is a multiple of four floats.
     Output is padded to a 16-byte row stride when necessary. Descriptor bounds
     remain logical N,K, so partial rows/columns are zero-filled on TMA loads.

@@ -70,7 +70,7 @@ __device__ __forceinline__ void cp_async_wait() {
 
 // Shared layout is logically row-major. Every 16-byte chunk is placed at
 // address ^ ((address >> 2) & 0x70), preserving 16-byte alignment.
-template<bool Direct>
+template<bool Direct,bool Transposed=false>
 __device__ __forceinline__ void load_tile(
     uint32_t *shared,const Args &args,int tile,int lane) {
     int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
@@ -125,7 +125,7 @@ __device__ __forceinline__ void load_tile(
     cp_async_commit();
 }
 
-template<bool Direct>
+template<bool Direct,bool Transposed=false>
 __device__ __forceinline__ void process_tile(
     const uint32_t *shared,const Args &args,int tile,int lane) {
     int tile_col=tile%args.tile_columns,tile_row=tile/args.tile_columns;
@@ -227,20 +227,42 @@ __device__ __forceinline__ void process_tile(
                 args.gate_col_scale[offset_low]=uint8_t(low_exp>>7);
                 args.gate_col_scale[offset_low+4]=uint8_t(high_exp>>7);
             }
-            column_out[pair]=cvt_e4m3x2_bf16x2(
-                bf16x2_scale_pair(
-                    gate_values[pair],uint8_t(low_exp>>7),uint8_t(high_exp>>7)));
+            if constexpr(Transposed) {
+                uint32_t low_next=__shfl_down_sync(0xffffffffu,low,1);
+                uint32_t high_next=__shfl_down_sync(0xffffffffu,high,1);
+                if((lane&1)==0) {
+                    uint16_t low_q=cvt_e4m3x2_bf16x2(
+                        bf16x2_scale(low|(low_next<<16),uint8_t(low_exp>>7)));
+                    uint16_t high_q=cvt_e4m3x2_bf16x2(
+                        bf16x2_scale(high|(high_next<<16),uint8_t(high_exp>>7)));
+                    size_t index=size_t(feature_low)*args.mp+block_row+lane;
+                    *reinterpret_cast<uint16_t*>(args.gate_col+index)=low_q;
+                    *reinterpret_cast<uint16_t*>(
+                        args.gate_col+index+args.mp)=high_q;
+                }
+            } else {
+                column_out[pair]=cvt_e4m3x2_bf16x2(
+                    bf16x2_scale_pair(
+                        gate_values[pair],
+                        uint8_t(low_exp>>7),uint8_t(high_exp>>7)));
+            }
         }
-        auto *column_dst=reinterpret_cast<uint4*>(
-            args.gate_col+size_t(block_row+lane)*args.n+block_col);
+        if constexpr(!Transposed) {
+            auto *column_dst=reinterpret_cast<uint4*>(
+                args.gate_col+size_t(block_row+lane)*args.n+block_col);
 #pragma unroll
-        for(int vector=0;vector<2;vector++) {
-            int pair=vector*8;
-            column_dst[vector]={
-                uint32_t(column_out[pair])|(uint32_t(column_out[pair+1])<<16),
-                uint32_t(column_out[pair+2])|(uint32_t(column_out[pair+3])<<16),
-                uint32_t(column_out[pair+4])|(uint32_t(column_out[pair+5])<<16),
-                uint32_t(column_out[pair+6])|(uint32_t(column_out[pair+7])<<16)};
+            for(int vector=0;vector<2;vector++) {
+                int pair=vector*8;
+                column_dst[vector]={
+                    uint32_t(column_out[pair])|
+                        (uint32_t(column_out[pair+1])<<16),
+                    uint32_t(column_out[pair+2])|
+                        (uint32_t(column_out[pair+3])<<16),
+                    uint32_t(column_out[pair+4])|
+                        (uint32_t(column_out[pair+5])<<16),
+                    uint32_t(column_out[pair+6])|
+                        (uint32_t(column_out[pair+7])<<16)};
+            }
         }
     } else {
         // Fused backward gradients use feature-major [N,MP] for wgrad A.
@@ -280,7 +302,7 @@ __device__ __forceinline__ void process_tile(
     }
 }
 
-template<bool Direct>
+template<bool Direct,bool Transposed=false>
 __global__ __launch_bounds__(256) void silu_bwd_quantize_kernel(Args args) {
     extern __shared__ __align__(16) uint8_t storage[];
     int warp=threadIdx.x/32,lane=threadIdx.x&31;
@@ -291,16 +313,16 @@ __global__ __launch_bounds__(256) void silu_bwd_quantize_kernel(Args args) {
         storage+warp*kStages*kInputs<Direct>*kTileWords*sizeof(uint32_t));
 
     int stage=0,next=tile+stride;
-    load_tile<Direct>(warp_shared,args,tile,lane);
+    load_tile<Direct,Transposed>(warp_shared,args,tile,lane);
     while(tile<args.total_tiles) {
         bool has_next=next<args.total_tiles;
         if(has_next)
-            load_tile<Direct>(
+            load_tile<Direct,Transposed>(
                 warp_shared+kInputs<Direct>*kTileWords,args,next,lane);
         if(has_next)cp_async_wait<1>();
         else cp_async_wait<0>();
         __syncwarp();
-        process_tile<Direct>(
+        process_tile<Direct,Transposed>(
             warp_shared+stage*kInputs<Direct>*kTileWords,args,tile,lane);
         __syncwarp();
         tile=next;next+=stride;stage^=1;
@@ -317,7 +339,7 @@ struct PlanBase {
     virtual void info(int*)=0;
 };
 
-template<bool Direct>
+template<bool Direct,bool Transposed=false>
 struct Plan final:PlanBase {
     Args args;
     int blocks;
@@ -348,11 +370,11 @@ struct Plan final:PlanBase {
             Direct?properties.multiProcessorCount*3
                   :properties.multiProcessorCount);
         check(cudaFuncSetAttribute(
-            silu_bwd_quantize_kernel<Direct>,
+            silu_bwd_quantize_kernel<Direct,Transposed>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,kSharedBytes<Direct>));
     }
     void launch(cudaStream_t stream) override {
-        silu_bwd_quantize_kernel<Direct>
+        silu_bwd_quantize_kernel<Direct,Transposed>
             <<<blocks,256,kSharedBytes<Direct>,stream>>>(args);
     }
     void info(int*out) override {
@@ -395,6 +417,22 @@ extern "C" void *tk_silu_bwd_q_create_direct(
            m<=0||n<=0||n%32)
             throw std::runtime_error("Invalid arguments or N not multiple of 32");
         return new Plan<true>(
+            x,x,x,row_fp8,row_scale,row_fp8,row_scale,
+            column_fp8,column_scale,column_fp8,column_scale,m,n);
+    }catch(const std::exception &exception) {
+        error=exception.what();return nullptr;
+    }
+}
+
+extern "C" void *tk_silu_bwd_q_create_direct_transposed(
+    void*x,void*row_fp8,void*row_scale,void*column_fp8,void*column_scale,
+    int m,int n) {
+    using namespace fp8gemm::silu_bwd_quantize;
+    try {
+        if(!x||!row_fp8||!row_scale||!column_fp8||!column_scale||
+           m<=0||n<=0||n%32)
+            throw std::runtime_error("Invalid arguments or N not multiple of 32");
+        return new Plan<true,true>(
             x,x,x,row_fp8,row_scale,row_fp8,row_scale,
             column_fp8,column_scale,column_fp8,column_scale,m,n);
     }catch(const std::exception &exception) {

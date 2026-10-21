@@ -179,9 +179,6 @@ def test_codegen_uses_packed_bf16_instructions():
 
 @pytest.mark.parametrize("shape", [(1, 32), (17, 128), (137, 256)])
 def test_quantized_outputs_match_existing_quantizers(shape):
-    from experiments.tk_mxfp8_dgrad import RowQuantizePlan
-    from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
-
     torch.cuda.synchronize()
     m, n = shape
     torch.manual_seed(173)
@@ -193,10 +190,12 @@ def test_quantized_outputs_match_existing_quantizers(shape):
 
     expected = []
     for reference in [reference_gate, reference_up]:
-        expected_row, expected_row_scale = RowQuantizePlan(reference)()
-        expected_col, expected_col_scale = ColumnQuantizePlan(
-            reference, transpose=True
-        )()
+        (
+            expected_row,
+            expected_row_scale,
+            expected_col,
+            expected_col_scale,
+        ) = SiluBwdQuantizeLibrary().plan_direct(reference, transpose=True)()
         torch.cuda.synchronize()
         expected.append(
             (expected_row, expected_row_scale, expected_col, expected_col_scale)
@@ -288,7 +287,7 @@ def test_quantized_codegen():
     section = next(
         block
         for block in sass.split("Function : ")[1:]
-        if "ILb0EEE" in block.splitlines()[0]
+        if "ILb0ELb0EEE" in block.splitlines()[0]
     )
     instructions = Counter(
         re.findall(
@@ -308,7 +307,7 @@ def test_quantized_codegen():
     direct = next(
         block
         for block in sass.split("Function : ")[1:]
-        if "ILb1EEE" in block.splitlines()[0]
+        if "ILb1ELb0EEE" in block.splitlines()[0]
     )
     direct_instructions = Counter(
         re.findall(
@@ -322,22 +321,21 @@ def test_quantized_codegen():
 
 @pytest.mark.parametrize("shape", [(1, 32), (17, 128), (137, 192)])
 def test_direct_cuda_dual_quantizer(shape):
-    from experiments.tk_mxfp8_dgrad import RowQuantizePlan
-    from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
-
     torch.manual_seed(66)
     x = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     plan = SiluBwdQuantizeLibrary().plan_direct(x)
+    transposed = SiluBwdQuantizeLibrary().plan_direct(x, transpose=True)
     row, row_scale, column, column_scale = plan()
-    expected_row, expected_row_scale = RowQuantizePlan(x)()
-    expected_column, expected_column_scale = ColumnQuantizePlan(x)()
+    expected_row, expected_row_scale, expected_column, expected_column_scale = (
+        transposed()
+    )
     torch.testing.assert_close(
         row.view(torch.uint8), expected_row.view(torch.uint8), rtol=0, atol=0
     )
     torch.testing.assert_close(row_scale, expected_row_scale, rtol=0, atol=0)
     torch.testing.assert_close(
         column.view(torch.uint8),
-        expected_column.view(torch.uint8),
+        expected_column.T.contiguous().view(torch.uint8),
         rtol=0,
         atol=0,
     )

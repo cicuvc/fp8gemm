@@ -6,7 +6,7 @@ import subprocess
 
 import torch
 
-from experiments.tk_persistent_gemm import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS
 
 OUTPUT = ROOT / "runs/tk_silu_bwd"
 
@@ -136,12 +136,17 @@ class SiluBwdQuantizeLibrary:
                 ct.c_int,
             ]
             self.lib.tk_silu_bwd_q_create_direct.restype = ct.c_void_p
+        if hasattr(self.lib, "tk_silu_bwd_q_create_direct_transposed"):
+            self.lib.tk_silu_bwd_q_create_direct_transposed.argtypes = [
+                ct.c_void_p
+            ] * 5 + [ct.c_int, ct.c_int]
+            self.lib.tk_silu_bwd_q_create_direct_transposed.restype = ct.c_void_p
 
     def plan(self, dy, half_gate, up):
         return SiluBwdQuantizePlan(self, dy, half_gate, up)
 
-    def plan_direct(self, x):
-        return SiluBwdDirectQuantizePlan(self, x)
+    def plan_direct(self, x, *, transpose=False):
+        return SiluBwdDirectQuantizePlan(self, x, transpose=transpose)
 
 
 class SiluBwdQuantizePlan:
@@ -258,17 +263,29 @@ class SiluBwdQuantizePlan:
 
 
 class SiluBwdDirectQuantizePlan:
-    """Direct BF16 -> dual-direction MXFP8 using the CUDA pipeline."""
+    """Direct BF16 -> dual-direction MXFP8 using the CUDA pipeline.
 
-    def __init__(self, owner, x):
+    The row result is always ``[M,K]``. The column result is token-major
+    ``[MP,K]`` by default, or feature-major ``[K,MP]`` with ``transpose=True``
+    for wgrad's A operand.
+    """
+
+    def __init__(self, owner, x, *, transpose=False):
         if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda:
             raise ValueError("Expected CUDA BF16 X[M,K]")
+        if not x.is_contiguous():
+            raise ValueError("Expected contiguous CUDA BF16 X[M,K]")
         m, k = x.shape
         if k % 32:
             raise ValueError("K must be a multiple of 32")
+        if transpose and not hasattr(
+            owner.lib, "tk_silu_bwd_q_create_direct_transposed"
+        ):
+            raise RuntimeError("Rebuild CUDA library for transposed quantization")
         self.x = x
         self.owner = owner
         self.m, self.k = m, k
+        self.transpose = bool(transpose)
         self.mp = (m + 127) // 128 * 128
         self.mp16 = (m + 15) // 16 * 16
         self.sp = (k + 15) // 16 * 16
@@ -278,15 +295,21 @@ class SiluBwdDirectQuantizePlan:
             device=x.device,
             dtype=torch.int32,
         )
+        column_shape = (k, self.mp) if transpose else (self.mp, k)
         self.column_fp8 = torch.empty(
-            (self.mp, k), device=x.device, dtype=torch.float8_e4m3fn
+            column_shape, device=x.device, dtype=torch.float8_e4m3fn
         )
         self.column_scale = torch.zeros(
             (self.mp // 128, self.sp),
             device=x.device,
             dtype=torch.int32,
         )
-        self.handle = owner.lib.tk_silu_bwd_q_create_direct(
+        create = (
+            owner.lib.tk_silu_bwd_q_create_direct_transposed
+            if transpose
+            else owner.lib.tk_silu_bwd_q_create_direct
+        )
+        self.handle = create(
             x.data_ptr(),
             self.row_fp8.data_ptr(),
             self.row_scale.data_ptr(),

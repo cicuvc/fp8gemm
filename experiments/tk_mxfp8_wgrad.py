@@ -2,18 +2,14 @@
 
 Both operands use independent per-feature/M32 E8M0 scales, packed as int32
 [ceil(M/128),roundup(features,16)]. B stays in physical [M,K] row-major order.
-The standalone Triton quantizer is a preparation/reference tool; the CUDA
-GEMM has no online quantization. These entry points do not change FP8Linear.
+The CUDA GEMM has no online quantization.
 """
 import ctypes as ct
 from pathlib import Path
 import re
 import subprocess
 import torch
-import triton
-import triton.language as tl
-import mxtest
-from experiments.tk_persistent_gemm import ROOT,FLAGS
+from experiments.mxfp8_core import ROOT,FLAGS
 
 OUTPUT=ROOT/'runs/tk_mxfp8_wgrad'
 CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
@@ -27,46 +23,6 @@ def build(output=OUTPUT):
         subprocess.run(['/usr/local/cuda/bin/nvcc',*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_mxfp8_wgrad.cu','-lcuda','-o',str(output/'libwgrad.so')],
                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=600)
-
-
-@triton.jit
-def _column_quantize(X,Q,S,M:tl.constexpr,F:tl.constexpr,MP:tl.constexpr,SP:tl.constexpr,
-                     S0:tl.constexpr,S1:tl.constexpr,TRANSPOSE:tl.constexpr):
-    token=tl.program_id(0)*128+tl.arange(0,128)
-    feature=tl.program_id(1)*32+tl.arange(0,32)
-    x=tl.load(X+token[:,None]*S0+feature[None,:]*S1,
-              (token[:,None]<M)&(feature[None,:]<F),0)
-    q,scale=mxtest.online_scale(tl.trans(x))
-    if TRANSPOSE:
-        tl.store(Q+feature[:,None]*MP+token[None,:],q,feature[:,None]<F)
-    else:
-        tl.store(Q+token[:,None]*F+feature[None,:],tl.trans(q),feature[None,:]<F)
-    words=tl.sum(scale.to(tl.uint32)<<(8*tl.arange(0,4))[None,:],axis=1)
-    tl.store(S+tl.program_id(0)*SP+feature,words,feature<SP)
-
-
-class ColumnQuantizePlan:
-    """BF16 x[M,F] -> FP8 quantized along M32, optionally physically transposed.
-
-    Token rows are zero-padded to 128; feature dimension is unchanged.
-    Scales use the same block-major packed layout in either data orientation.
-    Finite-BF16 online_scale semantics, including its exponent-254 limitation.
-    """
-    def __init__(self,x,*,transpose=False):
-        if x.ndim!=2 or min(x.shape)<=0 or x.dtype!=torch.bfloat16 or not x.is_cuda:
-            raise ValueError('Expected positive CUDA BF16 [M,F]')
-        self.x=x;self.transpose=bool(transpose)
-        m,f=x.shape;self.mp=mp=triton.cdiv(m,128)*128;self.sp=sp=triton.cdiv(f,16)*16
-        self.out=torch.empty((f,mp) if transpose else (mp,f),device=x.device,dtype=torch.float8_e4m3fn)
-        self.scales=torch.empty((mp//128,sp),device=x.device,dtype=torch.int32)
-
-    def __call__(self):
-        m,f=self.x.shape
-        with torch.cuda.device(self.x.device):
-            _column_quantize[(self.mp//128,triton.cdiv(f,32))](
-                self.x,self.out,self.scales,m,f,self.mp,self.sp,*self.x.stride(),self.transpose,
-                num_warps=4)
-        return self.out,self.scales
 
 
 class Library:

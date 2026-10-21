@@ -1,8 +1,7 @@
 """MXFP8 swapAB dX: operand layouts/scales, TMA tails, persistent reuse."""
 import pytest
 import torch
-import mxtest
-from experiments.tk_mxfp8_dgrad import Library,build,OUTPUT,ROOT,CONFIGS,RowQuantizePlan
+from experiments.tk_mxfp8_dgrad import Library,build,OUTPUT,ROOT,CONFIGS
 from experiments.tk_mxfp8_gemm import pack_a_scales
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
@@ -72,59 +71,6 @@ def test_graph_reuse(config):
     with torch.cuda.stream(stream):p()
     torch.cuda.current_stream().wait_stream(stream)
     torch.testing.assert_close(p.out,ref,rtol=0,atol=0)
-
-
-@pytest.mark.parametrize('shape',[(1,32),(137,96),(1031,384)])
-def test_quantizer(shape):
-    m,n=shape;torch.manual_seed(821)
-    x=torch.randn((m,n*2),device='cuda',dtype=torch.bfloat16)[:,::2]
-    p=RowQuantizePlan(x);q,s=p()
-    rq,rs=mxtest.launch_row_quantize(x.contiguous())
-    torch.testing.assert_close(q.view(torch.uint8),rq.view(torch.uint8),rtol=0,atol=0)
-    torch.testing.assert_close(s,pack_a_scales(rs),rtol=0,atol=0)
-    graph=torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):p()
-    x.zero_();q.view(torch.uint8).fill_(255);s.fill_(-1);graph.replay()
-    assert torch.count_nonzero(q.view(torch.uint8))==0 and torch.count_nonzero(s)==0
-
-
-@pytest.mark.parametrize('config',[0,7,12,14,17])
-def test_quantized_chain(config):
-    from experiments.tk_persistent_gemm import GemmLibrary
-    torch.manual_seed(9)
-    dy=torch.randn((137,256),device='cuda',dtype=torch.bfloat16)
-    w=torch.randn((256,384),device='cuda',dtype=torch.float32)
-    q=RowQuantizePlan(dy);q()
-    wq,sw=mxtest.launch_weight_quantize(w)
-    p=Library().plan(q.out,wq,q.scales,sw,config=config,sms=3)
-    ref=GemmLibrary().plan_ab(dy,wq,sw,config=8,swap_ab=True)().clone()
-    torch.testing.assert_close(p(),ref,rtol=0,atol=0)
-    graph=torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):q();p()
-    dy.zero_();graph.replay();assert torch.count_nonzero(p.out)==0
-
-
-@pytest.mark.parametrize('save_bf16',[False,True])
-def test_forward_epilogue_compatible(save_bf16):
-    from experiments.tk_mxfp8_gemm import Library as ForwardLibrary
-    from experiments.tk_persistent_gemm import GemmLibrary
-    torch.manual_seed(82)
-    x=torch.randn((137,128),device='cuda',dtype=torch.bfloat16)
-    qx=RowQuantizePlan(x);qx()
-    upstream_w,s0=mxtest.launch_weight_quantize(torch.randn((256,128),device='cuda'))
-    upstream=ForwardLibrary().plan(qx.out,upstream_w,qx.scales,s0,config=8,
-                                  save_quantized=True,save_bf16=save_bf16)
-    upstream()
-    # The normal BF16 forward result is the quantization reference, including
-    # when the upstream plan only materializes its FP8 output.
-    dy=ForwardLibrary().plan(qx.out,upstream_w,qx.scales,s0,config=8)()
-    w,sw=mxtest.launch_weight_quantize(torch.randn((256,384),device='cuda'))
-    p=Library().plan(upstream.qout,w,upstream.qscales,sw,config=12,sms=3)
-    ref=GemmLibrary().plan_ab(dy,w,sw,config=8,swap_ab=True)().clone()
-    torch.testing.assert_close(p(),ref,rtol=0,atol=0)
-    graph=torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):upstream();p()
-    qx.out.zero_();graph.replay();assert torch.count_nonzero(p.out)==0
 
 
 def test_validation():

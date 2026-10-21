@@ -1,4 +1,4 @@
-// Matched ablation of persistent_fp8_gemm: prequantized A/B, no online quantization.
+// Persistent MXFP8 GEMM with prequantized A/B operands.
 #include "kittens.cuh"
 #include "tma_ring_pipe.cuh"
 #include "fp8_shared_load.cuh"

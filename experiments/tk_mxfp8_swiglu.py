@@ -12,8 +12,7 @@ import subprocess
 
 import torch
 
-from experiments.tk_persistent_gemm import ROOT, FLAGS
-from experiments.tk_mxfp8_gemm import pack_a_scales
+from experiments.mxfp8_core import ROOT, FLAGS
 
 OUTPUT = ROOT / "runs/tk_mxfp8_swiglu"
 CONFIGS = [
@@ -233,11 +232,3 @@ class MXFP8SwiGLUPlan:
         if getattr(self, "handle", None):
             self.owner.lib.tk_mx_swiglu_destroy(self.handle)
             self.handle = None
-
-
-def quantize_activation(x):
-    """Quantize BF16 activation X and add the packed scale layout."""
-    import mxtest
-
-    quantized, scales = mxtest.launch_row_quantize(x)
-    return quantized, pack_a_scales(scales)

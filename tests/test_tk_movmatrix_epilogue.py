@@ -5,9 +5,9 @@ import subprocess
 import pytest
 import torch
 
-import mxtest
-from experiments.tk_mxfp8_gemm import Library, ROOT, build, pack_a_scales
-from experiments.tk_persistent_gemm import FLAGS
+from experiments.tk_mxfp8_gemm import Library, ROOT, build
+from experiments.mxfp8_core import FLAGS
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 from tests import test_tk_mxfp8_epilogue as reference_tests
 from tests.test_tk_mxfp8_epilogue import (
     operands, test_tiles, test_graph_reuse, test_next_layer,
@@ -48,13 +48,14 @@ def test_probe(c,kind):
     else:
         bits=torch.randint(0,256,(16,c),device='cuda',dtype=torch.int16)+0x3f00
         x=bits.view(torch.bfloat16)
-    expected,sc=mxtest.launch_row_quantize(x)
+    quantized=SiluBwdQuantizeLibrary().plan_direct(x)
+    expected,sc,_,_=quantized()
     lib=ct.CDLL(str(OUTPUT/'libprobe.so'))
     fn=lib.probe_movmatrix
     fn.argtypes=[ct.c_void_p]*3+[ct.c_int]*2+[ct.c_void_p]
     for mode in [0,1]:
-        q=torch.empty_like(expected);s=pack_a_scales(sc);s.fill_(-1)
+        q=torch.empty_like(expected);s=torch.empty_like(sc);s.fill_(-1)
         assert fn(x.data_ptr(),q.data_ptr(),s.data_ptr(),c,mode,
                   torch.cuda.current_stream().cuda_stream)==0
         torch.testing.assert_close(q.view(torch.uint8),expected.view(torch.uint8),rtol=0,atol=0)
-        torch.testing.assert_close(s,pack_a_scales(sc),rtol=0,atol=0)
+        torch.testing.assert_close(s,sc,rtol=0,atol=0)

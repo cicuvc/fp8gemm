@@ -12,7 +12,7 @@ import subprocess
 
 import torch
 
-from experiments.tk_persistent_gemm import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS
 
 OUTPUT = ROOT / "runs/tk_mxfp8_swiglu_dgrad"
 CONFIGS = [

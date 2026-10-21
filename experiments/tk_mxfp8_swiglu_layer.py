@@ -5,10 +5,11 @@ import math
 import torch
 from torch import nn
 
-from experiments.tk_mxfp8_dgrad import RowQuantizePlan
+from experiments.mxfp8_core import bind_fp8_optimizer, quantize_weight
 from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 
 class _ForwardState:
@@ -22,13 +23,13 @@ class _ForwardState:
         config,
         raster_group,
     ):
-        self.quantize_x = RowQuantizePlan(x)
+        self.quantize_x = SiluBwdQuantizeLibrary().plan_direct(x)
         shape = (x.shape[0], weight_gate.shape[0])
         self.gate_linear = torch.empty(shape, device=x.device, dtype=torch.bfloat16)
         self.up_linear = torch.empty_like(self.gate_linear)
         self.forward = MXFP8SwiGLULibrary().plan(
-            self.quantize_x.out,
-            self.quantize_x.scales,
+            self.quantize_x.row_fp8,
+            self.quantize_x.row_scale,
             weight_gate,
             weight_gate_scale,
             weight_up,
@@ -186,14 +187,12 @@ class MXFP8SwiGLU(nn.Module):
     def refresh_fp8_weights(self):
         if not self.gate_weight.is_cuda:
             raise RuntimeError("MXFP8SwiGLU requires a CUDA device")
-        import mxtest
-
         with torch.no_grad():
             self._gate_weight_fp8, self._gate_weight_scale = (
-                mxtest.launch_weight_quantize(self.gate_weight.detach())
+                quantize_weight(self.gate_weight.detach())
             )
             self._up_weight_fp8, self._up_weight_scale = (
-                mxtest.launch_weight_quantize(self.up_weight.detach())
+                quantize_weight(self.up_weight.detach())
             )
             self.down_proj.refresh_fp8_weight()
         self._synced_versions = (
@@ -296,8 +295,6 @@ class MXFP8SwiGLU(nn.Module):
         return state
 
     def bind_optimizer(self, optimizer):
-        from fp8_linear import bind_fp8_optimizer
-
         if self._optimizer_hook is not None:
             self._optimizer_hook.remove()
         self._optimizer_hook = bind_fp8_optimizer(self, optimizer)

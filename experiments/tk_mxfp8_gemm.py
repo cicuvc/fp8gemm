@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import re
 import torch
-from experiments.tk_persistent_gemm import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS
 CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
     r'^CFG\((\d+),(\d+),(\d+),(\d+),(\d+)\);',
     (ROOT/'cuda/mxfp8_configs.inc').read_text(),re.M)]

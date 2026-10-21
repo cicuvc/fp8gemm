@@ -3,10 +3,10 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_dgrad import Library as DgradLibrary, RowQuantizePlan
+from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_down import MXFP8DownProjection
 from experiments.tk_mxfp8_gemm import Library as GemmLibrary
-from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library as WgradLibrary
+from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
 from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
@@ -49,22 +49,20 @@ def test_forward_and_backward_match_explicit_component_chain():
     expected_out = forward()
     torch.testing.assert_close(out, expected_out, rtol=0, atol=0)
 
-    dy_row = RowQuantizePlan(dy)
-    dy_column = ColumnQuantizePlan(dy, transpose=True)
-    dy_row()
-    dy_column()
+    dy_quantize = SiluBwdQuantizeLibrary().plan_direct(dy, transpose=True)
+    dy_quantize()
     dx_plan = DgradLibrary().plan(
-        dy_row.out,
+        dy_quantize.row_fp8,
         weight_fp8,
-        dy_row.scales,
+        dy_quantize.row_scale,
         weight_scale,
         config=2,
         raster_group=1,
     )
     dw_plan = WgradLibrary().plan(
-        dy_column.out,
+        dy_quantize.column_fp8,
         quantized_hidden.column_fp8,
-        dy_column.scales,
+        dy_quantize.column_scale,
         quantized_hidden.column_scale,
         config=0,
         raster_group=1,

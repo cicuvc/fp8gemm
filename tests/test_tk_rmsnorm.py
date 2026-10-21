@@ -3,18 +3,17 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_dgrad import RowQuantizePlan
-from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
 from experiments.tk_rmsnorm import (
     FusedAddRMSNormBackwardPlan,
     FusedAddRMSNormPlan,
     RMSNormBackwardPlan,
     RMSNormDualQuantPlan,
 )
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),
-    reason="Triton CUDA test",
+    reason="CUDA required",
 )
 
 
@@ -33,8 +32,12 @@ def test_matches_materialized_rmsnorm_and_quantizers(shape):
     normalized = (
         x.float() * inverse[:, None] * factor[None, :]
     ).bfloat16()
-    expected_row, expected_row_scale = RowQuantizePlan(normalized)()
-    expected_column, expected_column_scale = ColumnQuantizePlan(normalized)()
+    (
+        expected_row,
+        expected_row_scale,
+        expected_column,
+        expected_column_scale,
+    ) = SiluBwdQuantizeLibrary().plan_direct(normalized)()
     torch.testing.assert_close(inverse, reference_inverse, rtol=2e-7, atol=2e-7)
     torch.testing.assert_close(
         row.view(torch.uint8), expected_row.view(torch.uint8), rtol=0, atol=0
@@ -171,8 +174,12 @@ def test_fused_add_modes(write_sum, y_mode):
         assert y_bf16 is None
     else:
         assert y_bf16 is None
-        expected_row, expected_row_scale = RowQuantizePlan(normalized)()
-        expected_column, expected_column_scale = ColumnQuantizePlan(normalized)()
+        (
+            expected_row,
+            expected_row_scale,
+            expected_column,
+            expected_column_scale,
+        ) = SiluBwdQuantizeLibrary().plan_direct(normalized)()
         torch.testing.assert_close(
             row_fp8.view(torch.uint8),
             expected_row.view(torch.uint8),

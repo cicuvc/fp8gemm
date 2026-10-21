@@ -32,7 +32,7 @@ class MXFP8SwiGLUBackward:
         wgrad_config=12,
         raster_group=13,
     ):
-        from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library as WgradLibrary
+        from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
 
         if (
             x.ndim != 2
@@ -60,7 +60,11 @@ class MXFP8SwiGLUBackward:
             ):
                 raise ValueError("Invalid prequantized X column scales")
         self.x_column, self.x_column_scale = x_column, x_column_scale
-        self.quantize_x = None if x_column is not None else ColumnQuantizePlan(x)
+        self.quantize_x = (
+            None
+            if x_column is not None
+            else SiluBwdQuantizeLibrary().plan_direct(x)
+        )
         self.dx_plan = SwiGLUDgradLibrary().plan(
             self.quantize.gate_row,
             self.quantize.up_row,
@@ -76,17 +80,25 @@ class MXFP8SwiGLUBackward:
         wgrad_library = WgradLibrary()
         self.gate_weight_grad = wgrad_library.plan(
             self.quantize.gate_col,
-            x_column if x_column is not None else self.quantize_x.out,
+            x_column if x_column is not None else self.quantize_x.column_fp8,
             self.quantize.gate_col_scale,
-            x_column_scale if x_column_scale is not None else self.quantize_x.scales,
+            (
+                x_column_scale
+                if x_column_scale is not None
+                else self.quantize_x.column_scale
+            ),
             config=wgrad_config,
             raster_group=raster_group,
         )
         self.up_weight_grad = wgrad_library.plan(
             self.quantize.up_col,
-            x_column if x_column is not None else self.quantize_x.out,
+            x_column if x_column is not None else self.quantize_x.column_fp8,
             self.quantize.up_col_scale,
-            x_column_scale if x_column_scale is not None else self.quantize_x.scales,
+            (
+                x_column_scale
+                if x_column_scale is not None
+                else self.quantize_x.column_scale
+            ),
             config=wgrad_config,
             raster_group=raster_group,
         )

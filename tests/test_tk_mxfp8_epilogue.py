@@ -5,9 +5,9 @@ import subprocess
 import pytest
 import torch
 
-import mxtest
-from experiments.tk_mxfp8_gemm import Library, OUTPUT, ROOT, CONFIGS, pack_a_scales
-from experiments.tk_persistent_gemm import FLAGS
+from experiments.tk_mxfp8_gemm import Library, OUTPUT, ROOT, CONFIGS
+from experiments.mxfp8_core import FLAGS, quantize_weight
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_gemm import compiled, exact_operands
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
@@ -15,9 +15,10 @@ pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_de
 
 
 def check_quantized(p):
-    q,sc=mxtest.launch_row_quantize(p.out)
-    torch.testing.assert_close(p.qout.view(torch.uint8),q.view(torch.uint8),rtol=0,atol=0)
-    torch.testing.assert_close(p.qscales,pack_a_scales(sc),rtol=0,atol=0)
+    q=SiluBwdQuantizeLibrary().plan_direct(p.out)
+    q()
+    torch.testing.assert_close(p.qout.view(torch.uint8),q.row_fp8.view(torch.uint8),rtol=0,atol=0)
+    torch.testing.assert_close(p.qscales,q.row_scale,rtol=0,atol=0)
 
 
 @pytest.fixture(scope='module',params=[(13,384,128),(1031,640,1152)])
@@ -37,9 +38,11 @@ def test_tiles(operands,config):
 @pytest.mark.parametrize('config',[43,70,106])
 def test_graph_reuse(config):
     torch.manual_seed(851)
-    a,sa=mxtest.launch_row_quantize(torch.randn((777,256),device='cuda',dtype=torch.bfloat16))
-    b,sb=mxtest.launch_weight_quantize(torch.randn((384,256),device='cuda'))
-    args=[a,b,pack_a_scales(sa),sb]
+    aq=SiluBwdQuantizeLibrary().plan_direct(
+        torch.randn((777,256),device='cuda',dtype=torch.bfloat16)
+    )
+    b,sb=quantize_weight(torch.randn((384,256),device='cuda'))
+    args=[aq.row_fp8,b,aq.row_scale,sb]
     out=torch.empty((777,384),device='cuda',dtype=torch.bfloat16)
     q=torch.empty_like(out,dtype=torch.float8_e4m3fn)
     qs=torch.empty((3,784),device='cuda',dtype=torch.int32)
@@ -50,12 +53,12 @@ def test_graph_reuse(config):
     p();check_quantized(p)
     graph=torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):p()
-    saved=a.clone();a.zero_();q.view(torch.uint8).fill_(255);qs.fill_(-1)
+    saved=aq.row_fp8.clone();aq.row_fp8.zero_();q.view(torch.uint8).fill_(255);qs.fill_(-1)
     graph.replay()
     assert torch.count_nonzero(out)==0
     assert torch.count_nonzero(q.view(torch.uint8))==0
     assert torch.count_nonzero(qs)==0
-    a.copy_(saved);graph.replay()
+    aq.row_fp8.copy_(saved);graph.replay()
     torch.testing.assert_close(out,ref,rtol=0,atol=0);check_quantized(p)
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):p()
@@ -76,10 +79,11 @@ def test_next_layer():
     args,ref=exact_operands(137,256,128)
     lib=Library()
     p=lib.plan(*args,config=70,save_quantized=True);p()
-    weight,sw=mxtest.launch_weight_quantize(torch.randn((192,256),device='cuda'))
+    weight,sw=quantize_weight(torch.randn((192,256),device='cuda'))
     next_plan=lib.plan(p.qout,weight,p.qscales,sw,config=70)
-    q,sc=mxtest.launch_row_quantize(ref)
-    expected=lib.plan(q,weight,pack_a_scales(sc),sw,config=70)().clone()
+    q=SiluBwdQuantizeLibrary().plan_direct(ref)
+    q()
+    expected=lib.plan(q.row_fp8,weight,q.row_scale,sw,config=70)().clone()
     torch.testing.assert_close(next_plan(),expected,rtol=0,atol=0)
 
 

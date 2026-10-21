@@ -1,9 +1,9 @@
 """MXFP8 AB dW: per-feature scales, TMA tails, persistent reuse and preparation."""
 import pytest
 import torch
-import mxtest
-from experiments.tk_mxfp8_wgrad import Library,build,OUTPUT,ROOT,CONFIGS,ColumnQuantizePlan
+from experiments.tk_mxfp8_wgrad import Library,build,OUTPUT,ROOT,CONFIGS
 from experiments.tk_mxfp8_gemm import pack_a_scales
+from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
                             reason='SM120 required')
@@ -74,22 +74,22 @@ def test_graph_reuse(config):
     torch.testing.assert_close(p.out,ref,rtol=0,atol=0)
 
 
-@pytest.mark.parametrize('shape',[(1,13),(137,192),(1031,384)])
+@pytest.mark.parametrize('shape',[(1,32),(137,192),(1031,384)])
 @pytest.mark.parametrize('transpose',[False,True])
 def test_quantizer(shape,transpose):
     m,f=shape;torch.manual_seed(821)
-    # Accept strided source views. The quantized data remains contiguous.
-    x=torch.randn((m,f*2),device='cuda',dtype=torch.bfloat16)[:,::2]
-    p=ColumnQuantizePlan(x,transpose=transpose);q,s=p()
-    padded=torch.zeros((f,p.mp),device='cuda',dtype=torch.bfloat16);padded[:,:m]=x.T
-    rq,rs=mxtest.launch_row_quantize(padded)
-    expected=rq.view(torch.uint8) if transpose else rq.view(torch.uint8).T
-    torch.testing.assert_close(q.view(torch.uint8),expected,rtol=0,atol=0)
-    torch.testing.assert_close(s,pack_a_scales(rs),rtol=0,atol=0)
+    x=torch.randn((m,f),device='cuda',dtype=torch.bfloat16)
+    normal=SiluBwdQuantizeLibrary().plan_direct(x)
+    oriented=SiluBwdQuantizeLibrary().plan_direct(x,transpose=transpose)
+    nq=normal();oriented_outputs=oriented();q=oriented_outputs[2]
+    expected=nq[2].T.contiguous() if transpose else nq[2]
+    torch.testing.assert_close(q.view(torch.uint8),expected.view(torch.uint8),rtol=0,atol=0)
+    torch.testing.assert_close(oriented.column_scale,nq[3],rtol=0,atol=0)
     graph=torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):p()
-    x.zero_();q.view(torch.uint8).fill_(255);s.fill_(-1);graph.replay()
-    assert torch.count_nonzero(q.view(torch.uint8))==0 and torch.count_nonzero(s)==0
+    with torch.cuda.graph(graph):oriented()
+    x.zero_();q.view(torch.uint8).fill_(255);oriented.column_scale.fill_(-1);graph.replay()
+    assert torch.count_nonzero(q.view(torch.uint8))==0
+    assert torch.count_nonzero(oriented.column_scale)==0
 
 
 def test_quantized_chain():
@@ -97,16 +97,28 @@ def test_quantized_chain():
     torch.manual_seed(9)
     dy=torch.randn((137,37),device='cuda',dtype=torch.bfloat16)
     x=torch.randn((137,128),device='cuda',dtype=torch.bfloat16)
-    qa=ColumnQuantizePlan(dy,transpose=True);qb=ColumnQuantizePlan(x)
+    dy=torch.nn.functional.pad(dy,(0,27))
+    qa=SiluBwdQuantizeLibrary().plan_direct(dy,transpose=True)
+    qb=SiluBwdQuantizeLibrary().plan_direct(x)
     qa();qb()
-    p=Library().plan(qa.out,qb.out,qa.scales,qb.scales,config=12,sms=3)
+    p=Library().plan(
+        qa.column_fp8,
+        qb.column_fp8,
+        qa.column_scale,
+        qb.column_scale,
+        config=12,
+        sms=3,
+    )
     def dequant(q,s,transpose):
         f=q.shape[0] if transpose else q.shape[1]
         scale=((s[:,:f].to(torch.int64)[:,:,None]>>(8*torch.arange(4,device='cuda')))&255)
         scale=scale.permute(1,0,2).reshape(f,-1).repeat_interleave(32,1)
         values=q.double() if transpose else q.double().T
         return torch.ldexp(values,scale.int()-127)
-    ref=(dequant(qa.out,qa.scales,True)@dequant(qb.out,qb.scales,False).T).bfloat16()
+    ref=(
+        dequant(qa.column_fp8,qa.column_scale,True)
+        @ dequant(qb.column_fp8,qb.column_scale,False).T
+    ).bfloat16()
     torch.testing.assert_close(p(),ref,rtol=0,atol=0)
     graph=torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):qa();qb();p()

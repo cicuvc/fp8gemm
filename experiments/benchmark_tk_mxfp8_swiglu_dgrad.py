@@ -5,6 +5,7 @@ import gc
 import hashlib
 import json
 from pathlib import Path
+import statistics
 import subprocess
 import sys
 
@@ -13,7 +14,6 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from experiments.benchmark_tk_mxfp8_swiglu import graph_benchmark
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_gemm import pack_a_scales
 from experiments.tk_mxfp8_swiglu_dgrad import (
@@ -22,6 +22,32 @@ from experiments.tk_mxfp8_swiglu_dgrad import (
     SwiGLUDgradLibrary,
     build,
 )
+
+
+def graph_benchmark(functions, rounds=7, repeats=24):
+    results = {}
+    for name, function in functions.items():
+        for _ in range(3):
+            function()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            for _ in range(repeats):
+                function()
+        values = []
+        for _ in range(rounds):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            graph.replay()
+            end.record()
+            end.synchronize()
+            values.append(start.elapsed_time(end) * 1000 / repeats)
+        results[name] = {
+            "median_us": statistics.median(values),
+            "min_us": min(values),
+            "max_us": max(values),
+        }
+    return results
 
 
 def operands(m, n, k, seed=123):

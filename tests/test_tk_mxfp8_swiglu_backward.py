@@ -3,7 +3,6 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_gemm import pack_a_scales
 from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward, build
 
 pytestmark = pytest.mark.skipif(
@@ -86,7 +85,7 @@ def test_shapes_reuse_and_graph():
 
 
 def test_wgrad_outputs_match_existing_kernel_chain():
-    from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan, Library
+    from experiments.tk_mxfp8_wgrad import Library
     from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
     m, n, k = 137, 128, 128
@@ -97,22 +96,22 @@ def test_wgrad_outputs_match_existing_kernel_chain():
 
     quantized = SiluBwdQuantizeLibrary().plan(values[0], values[1], values[2])
     quantized()
-    xq = ColumnQuantizePlan(values[3])
+    xq = SiluBwdQuantizeLibrary().plan_direct(values[3])
     xq()
     library = Library()
     reference_gate = library.plan(
         quantized.gate_col,
-        xq.out,
+        xq.column_fp8,
         quantized.gate_col_scale,
-        xq.scales,
+        xq.column_scale,
         config=12,
         raster_group=13,
     )()
     reference_up = library.plan(
         quantized.up_col,
-        xq.out,
+        xq.column_fp8,
         quantized.up_col_scale,
-        xq.scales,
+        xq.column_scale,
         config=12,
         raster_group=13,
     )()
