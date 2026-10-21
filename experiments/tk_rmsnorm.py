@@ -659,3 +659,241 @@ class FusedAddRMSNormPlan:
             self.column_fp8,
             self.column_scale,
         )
+
+
+@triton.jit
+def _fused_add_dot(
+    dy,
+    x,
+    residual,
+    factor,
+    dot,
+    K,
+    dy_stride,
+    x_stride,
+    residual_stride,
+    factor_stride,
+    HAS_FACTOR: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK_K)
+    mask = cols < K
+    dy_values = tl.load(
+        dy + row * dy_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    summed = (
+        tl.load(
+            x + row * x_stride + cols,
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        + tl.load(
+            residual + row * residual_stride + cols,
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+    )
+    if HAS_FACTOR:
+        scale_factor = tl.load(
+            factor + cols * factor_stride,
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        dot_value = tl.sum(dy_values * summed * scale_factor, axis=0)
+    else:
+        dot_value = tl.sum(dy_values * summed, axis=0)
+    tl.store(dot + row, dot_value)
+
+
+@triton.jit
+def _fused_add_rmsnorm_backward(
+    dy,
+    x,
+    residual,
+    factor,
+    inverse_rms,
+    dot,
+    dx,
+    factor_partial,
+    M,
+    K,
+    dy_stride,
+    x_stride,
+    residual_stride,
+    dx_stride,
+    factor_stride,
+    HAS_FACTOR: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row_block = tl.program_id(0)
+    col_block = tl.program_id(1)
+    rows = row_block * 32 + tl.arange(0, 32)
+    cols = col_block * BLOCK_K + tl.arange(0, BLOCK_K)
+    row_mask = rows < M
+    col_mask = cols < K
+    mask = row_mask[:, None] & col_mask[None, :]
+    dy_values = tl.load(
+        dy + rows[:, None] * dy_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    summed = (
+        tl.load(
+            x + rows[:, None] * x_stride + cols[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        + tl.load(
+            residual + rows[:, None] * residual_stride + cols[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+    )
+    inverse = tl.load(
+        inverse_rms + rows,
+        mask=row_mask,
+        other=0.0,
+    ).to(tl.float32)
+    if HAS_FACTOR:
+        scale_factor = tl.load(
+            factor + cols * factor_stride,
+            mask=col_mask,
+            other=0.0,
+        ).to(tl.float32)
+        dy_scaled = dy_values * scale_factor[None, :]
+    else:
+        dy_scaled = dy_values
+    dot_value = tl.load(dot + rows, mask=row_mask, other=0.0)
+    correction = (inverse * inverse / K) * dot_value
+    grad_sum = inverse[:, None] * (
+        dy_scaled - correction[:, None] * summed
+    )
+    tl.store(
+        dx + rows[:, None] * dx_stride + cols[None, :],
+        grad_sum.to(tl.bfloat16),
+        mask=mask,
+    )
+    if HAS_FACTOR:
+        partial = tl.sum(dy_values * summed * inverse[:, None], axis=0)
+        tl.store(
+            factor_partial + row_block * K + cols,
+            partial,
+            mask=col_mask,
+        )
+
+
+@triton.jit
+def _reduce_factor_grad_bf16(
+    factor_partial,
+    factor_grad,
+    row_blocks,
+    K,
+    BLOCK: tl.constexpr,
+):
+    cols = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = cols < K
+    accumulator = tl.zeros((BLOCK,), dtype=tl.float32)
+    for row_block in range(0, row_blocks):
+        accumulator += tl.load(
+            factor_partial + row_block * K + cols,
+            mask=mask,
+            other=0.0,
+        )
+    tl.store(factor_grad + cols, accumulator.to(tl.bfloat16), mask=mask)
+
+
+class FusedAddRMSNormBackwardPlan:
+    """BF16 backward for ``RMSNorm(x + residual)``."""
+
+    def __init__(self, dy, x, residual, factor, inverse_rms):
+        if (
+            dy.shape != x.shape
+            or residual.shape != x.shape
+            or dy.dtype != torch.bfloat16
+            or x.dtype != torch.bfloat16
+            or residual.dtype != torch.bfloat16
+        ):
+            raise ValueError("Expected BF16 dY, X, residual with equal shapes")
+        if factor is not None:
+            if factor.ndim != 1 or factor.shape[0] != x.shape[1]:
+                raise ValueError("Expected factor[K]")
+            if factor.dtype not in (torch.float32, torch.bfloat16):
+                raise ValueError("Factor must be FP32 or BF16")
+        if inverse_rms.shape != (x.shape[0],) or inverse_rms.dtype != torch.float32:
+            raise ValueError("Expected FP32 inverse_rms[M]")
+        self.dy, self.x, self.residual = dy, x, residual
+        self.factor, self.inverse_rms = factor, inverse_rms
+        self.m, self.k = x.shape
+        self.row_blocks = (self.m + 31) // 32
+        self.dot = torch.empty(self.m, device=x.device, dtype=torch.float32)
+        self.dx = torch.empty_like(x)
+        self.dresidual = self.dx
+        self.factor_grad = (
+            torch.empty(self.k, device=x.device, dtype=torch.bfloat16)
+            if factor is not None
+            else None
+        )
+        self.factor_partial = (
+            torch.empty(
+                (self.row_blocks, self.k),
+                device=x.device,
+                dtype=torch.float32,
+            )
+            if factor is not None
+            else None
+        )
+
+    def __call__(self):
+        factor = self.factor if self.factor is not None else self.x
+        factor_stride = self.factor.stride(0) if self.factor is not None else 0
+        _fused_add_dot[(self.m,)](
+            self.dy,
+            self.x,
+            self.residual,
+            factor,
+            self.dot,
+            self.k,
+            self.dy.stride(0),
+            self.x.stride(0),
+            self.residual.stride(0),
+            factor_stride,
+            HAS_FACTOR=self.factor is not None,
+            BLOCK_K=triton.next_power_of_2(self.k),
+        )
+        partial = self.factor_partial if self.factor_partial is not None else self.dot
+        _fused_add_rmsnorm_backward[
+            (self.row_blocks, triton.cdiv(self.k, 128))
+        ](
+            self.dy,
+            self.x,
+            self.residual,
+            factor,
+            self.inverse_rms,
+            self.dot,
+            self.dx,
+            partial,
+            self.m,
+            self.k,
+            self.dy.stride(0),
+            self.x.stride(0),
+            self.residual.stride(0),
+            self.dx.stride(0),
+            factor_stride,
+            HAS_FACTOR=self.factor is not None,
+            BLOCK_K=128,
+            num_warps=4,
+        )
+        if self.factor_grad is not None:
+            block = 256
+            _reduce_factor_grad_bf16[(triton.cdiv(self.k, block),)](
+                self.factor_partial,
+                self.factor_grad,
+                self.row_blocks,
+                self.k,
+                BLOCK=block,
+                num_warps=4,
+            )
+        return self.dx, self.dresidual, self.factor_grad

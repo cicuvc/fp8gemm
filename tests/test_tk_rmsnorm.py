@@ -6,6 +6,7 @@ import torch
 from experiments.tk_mxfp8_dgrad import RowQuantizePlan
 from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
 from experiments.tk_rmsnorm import (
+    FusedAddRMSNormBackwardPlan,
     FusedAddRMSNormPlan,
     RMSNormBackwardPlan,
     RMSNormDualQuantPlan,
@@ -217,3 +218,83 @@ def test_fused_add_without_factor_and_graph():
     current = [value.clone() for value in plan() if value is not None]
     for actual, expected in zip(current, first):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("shape", [(1, 32), (17, 128), (137, 192)])
+@pytest.mark.parametrize("has_factor", [False, True])
+def test_fused_add_backward_matches_autograd(shape, has_factor):
+    m, k = shape
+    torch.manual_seed(731)
+    x = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    dy = torch.randn_like(x)
+    factor = (
+        torch.randn(k, device="cuda").mul_(0.1).add_(1.0)
+        if has_factor
+        else None
+    )
+    forward = FusedAddRMSNormPlan(x, residual, factor, write_sum=False)
+    forward()
+    backward = FusedAddRMSNormBackwardPlan(
+        dy, x, residual, factor, forward.inverse_rms
+    )
+    dx, dresidual, factor_grad = backward()
+    torch.cuda.synchronize()
+
+    x_reference = x.float().requires_grad_()
+    residual_reference = residual.float().requires_grad_()
+    factor_reference = (
+        factor.float().requires_grad_() if factor is not None else None
+    )
+    summed = x_reference + residual_reference
+    inverse = torch.rsqrt(summed.square().mean(1) + 1e-6)
+    output = summed * inverse[:, None]
+    if factor_reference is not None:
+        output = output * factor_reference[None, :]
+    output.backward(dy.float())
+    expected_dx = x_reference.grad.bfloat16()
+    expected_residual = residual_reference.grad.bfloat16()
+    torch.testing.assert_close(dx, expected_dx, rtol=2e-2, atol=2e-3)
+    torch.testing.assert_close(dresidual, expected_residual, rtol=2e-2, atol=2e-3)
+    assert dx.data_ptr() == dresidual.data_ptr()
+    if has_factor:
+        torch.testing.assert_close(
+            factor_grad,
+            factor_reference.grad.bfloat16(),
+            rtol=2e-2,
+            atol=2e-3,
+        )
+        assert factor_grad.dtype == torch.bfloat16
+    else:
+        assert factor_grad is None
+
+
+def test_fused_add_backward_graph_and_reuse():
+    m, k = 137, 128
+    torch.manual_seed(732)
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    dy = torch.randn_like(x)
+    factor = torch.randn(k, device="cuda").mul_(0.1).add_(1.0)
+    forward = FusedAddRMSNormPlan(x, residual, factor)
+    forward()
+    plan = FusedAddRMSNormBackwardPlan(
+        dy, x, residual, factor, forward.inverse_rms
+    )
+    first_dx, _, first_factor = (value.clone() for value in plan())
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        plan()
+    saved_residual = residual.clone()
+    saved_dy = dy.clone()
+    residual.zero_()
+    dy.zero_()
+    graph.replay()
+    torch.cuda.synchronize()
+    assert torch.count_nonzero(plan.dx) == 0
+    assert torch.count_nonzero(plan.factor_grad) == 0
+    residual.copy_(saved_residual)
+    dy.copy_(saved_dy)
+    graph.replay()
+    torch.testing.assert_close(plan.dx, first_dx, rtol=0, atol=0)
+    torch.testing.assert_close(plan.factor_grad, first_factor, rtol=0, atol=0)
