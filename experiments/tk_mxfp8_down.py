@@ -238,6 +238,14 @@ class MXFP8DownProjection(nn.Module):
         self._fp8_dirty = True
         return self
 
+    def fp8_parameter_bindings(self):
+        return ((self.master_weight, self._weight_fp8, self._weight_scale),)
+
+    def mark_fp8_synced(self):
+        self._synced_version = self.master_weight._version
+        self._fp8_dirty = False
+        return self
+
     def _sync_if_needed(self):
         if self._fp8_dirty or self._synced_version != self.master_weight._version:
             self.refresh_fp8_weight()

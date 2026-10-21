@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from experiments.fp8_decoder_transformer import FP8DecoderTransformer, RotaryEmbedding
+from fp8_adamw import FusedAdamWMXFP8
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
@@ -160,6 +161,54 @@ def test_repeated_steps_reuse_plans_and_remain_finite():
         optimizer.step()
 
     assert cached_plan_ids[0] == cached_plan_ids[1] == cached_plan_ids[2]
+
+
+def test_fused_adamw_updates_model_fp8_cache_directly():
+    torch.manual_seed(206)
+    model = FP8DecoderTransformer(
+        vocab_size=257,
+        d_model=64,
+        n_layers=2,
+        n_heads=4,
+        mlp_hidden=128,
+        context_length=32,
+        device="cuda",
+        qkv_forward_config=0,
+        qkv_dx_config=0,
+        qkv_dw_config=0,
+        swiglu_forward_config=1,
+        swiglu_dx_config=5,
+        swiglu_dw_config=0,
+        down_forward_config=0,
+        down_dx_config=2,
+        down_dw_config=0,
+    )
+    optimizer = FusedAdamWMXFP8(model.parameters(), lr=1e-4)
+    model.bind_optimizer(optimizer)
+    assert len(optimizer._fp8_outputs) == 12
+
+    attention = model.blocks[0].attention
+    previous_fp8 = attention._q_fp8.clone()
+    tokens = torch.randint(1, 257, (15,), device="cuda")
+    cu_seqlens = torch.tensor([0, 8, 15], device="cuda", dtype=torch.int32)
+    loss = model.forward_loss(
+        tokens,
+        tokens.clone(),
+        cu_seqlens,
+        8,
+        num_chunks=2,
+    )
+    loss.backward()
+    optimizer.step()
+    torch.cuda.synchronize()
+
+    assert attention._synced_versions[0] == attention.q_weight._version
+    assert not torch.equal(
+        previous_fp8.view(torch.uint8), attention._q_fp8.view(torch.uint8)
+    )
+    with torch.no_grad():
+        logits = model(tokens, cu_seqlens, 8)
+    assert torch.isfinite(logits).all()
 
 
 def test_fla_rope_matches_interleaved_reference():

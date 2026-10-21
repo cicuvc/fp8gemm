@@ -210,6 +210,21 @@ class MXFP8SwiGLU(nn.Module):
         self.down_proj.mark_fp8_dirty()
         return self
 
+    def fp8_parameter_bindings(self):
+        return (
+            (self.gate_weight, self._gate_weight_fp8, self._gate_weight_scale),
+            (self.up_weight, self._up_weight_fp8, self._up_weight_scale),
+        )
+
+    def mark_fp8_synced(self):
+        self._synced_versions = (
+            self.gate_weight._version,
+            self.up_weight._version,
+            self.down_proj.master_weight._version,
+        )
+        self._fp8_dirty = False
+        return self
+
     def _sync_if_needed(self):
         versions = (
             self.gate_weight._version,

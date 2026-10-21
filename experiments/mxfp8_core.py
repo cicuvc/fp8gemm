@@ -71,8 +71,28 @@ def bind_fp8_optimizer(
 ):
     """Refresh every MXFP8 cache once after an optimizer step."""
 
+    bind_parameter = getattr(optimizer, "bind_fp8_parameter", None)
+    fused_quantization = callable(bind_parameter)
+    if fused_quantization:
+        bound = set()
+        for submodule in module.modules():
+            bindings = getattr(submodule, "fp8_parameter_bindings", None)
+            if not callable(bindings):
+                continue
+            for parameter, weight_fp8, weight_scale in bindings():
+                parameter_id = id(parameter)
+                if parameter_id not in bound:
+                    bind_parameter(parameter, weight_fp8, weight_scale)
+                    bound.add(parameter_id)
+
     def post_step_hook(optimizer, args, kwargs):
-        refresh_fp8_modules(module)
+        if fused_quantization:
+            for submodule in module.modules():
+                mark_synced = getattr(submodule, "mark_fp8_synced", None)
+                if callable(mark_synced):
+                    mark_synced()
+        else:
+            refresh_fp8_modules(module)
 
     return optimizer.register_step_post_hook(post_step_hook)
 

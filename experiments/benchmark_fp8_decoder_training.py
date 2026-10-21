@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from experiments.fp8_decoder_transformer import FP8DecoderTransformer
-from fp8_adamw import AdamWStateDtype, optimizer_state_nbytes
+from fp8_adamw import AdamWStateDtype, FusedAdamWMXFP8, optimizer_state_nbytes
 
 
 def decoder_flops(
@@ -88,11 +88,14 @@ def main():
     parser.add_argument("--no-fused-linear-ce", action="store_true")
     parser.add_argument("--fused-ce-chunks", type=int, default=2)
     parser.add_argument("--bf16-adam-state", action="store_true")
+    parser.add_argument("--fused-adamw", action="store_true")
     parser.add_argument(
         "--output",
         default="benchmarks/fp8_decoder_training_rtx5090.json",
     )
     args = parser.parse_args()
+    if args.bf16_adam_state and args.fused_adamw:
+        parser.error("--bf16-adam-state and --fused-adamw are mutually exclusive")
 
     if args.tokens_per_microbatch % args.context_length:
         raise ValueError("tokens-per-microbatch must contain whole sequences")
@@ -139,7 +142,12 @@ def main():
         loss.backward()
 
     optimizer = (
-        AdamWStateDtype(
+        FusedAdamWMXFP8(
+            model.parameters(),
+            lr=1e-4,
+        )
+        if args.fused_adamw
+        else AdamWStateDtype(
             model.parameters(),
             lr=1e-4,
             moment1_dtype=torch.bfloat16,
@@ -212,6 +220,9 @@ def main():
             else "fla.FusedLinearCrossEntropyLoss"
         ),
         "optimizer": (
+            "FusedAdamWMXFP8(BF16 moments, fused MXFP8 update)"
+            if args.fused_adamw
+            else
             "AdamWStateDtype(BF16 moments)"
             if args.bf16_adam_state
             else "torch.optim.AdamW(FP32 state defaults)"
@@ -233,7 +244,8 @@ def main():
                 "position IDs are precomputed before capture."
             ),
             "full_step": (
-                "CUDA events; AdamW step and FP8 weight-cache refresh included."
+                "CUDA events; optimizer step and any required FP8 cache "
+                "refresh included."
             ),
             "mfu": (
                 "Useful model FLOPs divided by nominal 419 TFLOPS FP8 peak. "

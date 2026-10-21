@@ -526,6 +526,22 @@ class FP8Attention(nn.Module):
         self._fp8_dirty = True
         return self
 
+    def fp8_parameter_bindings(self):
+        return (
+            (self.q_weight, self._q_fp8, self._q_scale),
+            (self.k_weight, self._k_fp8, self._k_scale),
+            (self.v_weight, self._v_fp8, self._v_scale),
+        )
+
+    def mark_fp8_synced(self):
+        self._synced_versions = (
+            self.q_weight._version,
+            self.k_weight._version,
+            self.v_weight._version,
+        )
+        self._fp8_dirty = False
+        return self
+
     def _sync_if_needed(self):
         versions = (
             self.q_weight._version,
@@ -988,6 +1004,20 @@ class PrenormSwiGLU(nn.Module):
     def mark_fp8_dirty(self):
         self._fp8_dirty = True
         self.down_proj.mark_fp8_dirty()
+        return self
+
+    def fp8_parameter_bindings(self):
+        return (
+            (self.gate_weight, self._gate_fp8, self._gate_scale),
+            (self.up_weight, self._up_fp8, self._up_scale),
+        )
+
+    def mark_fp8_synced(self):
+        self._synced_versions = (
+            self.gate_weight._version,
+            self.up_weight._version,
+        )
+        self._fp8_dirty = False
         return self
 
     def _sync_if_needed(self):
