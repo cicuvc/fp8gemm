@@ -285,7 +285,11 @@ def test_quantized_codegen():
         ],
         text=True,
     )
-    section = sass.split("Function : ")[1]
+    section = next(
+        block
+        for block in sass.split("Function : ")[1:]
+        if "ILb0EEE" in block.splitlines()[0]
+    )
     instructions = Counter(
         re.findall(
             r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
@@ -301,3 +305,40 @@ def test_quantized_codegen():
         assert instructions[opcode] > 0
     assert any(opcode.startswith("LDGSTS.") for opcode in instructions)
     assert not any(op.startswith(("LDL", "STL")) for op in instructions)
+    direct = next(
+        block
+        for block in sass.split("Function : ")[1:]
+        if "ILb1EEE" in block.splitlines()[0]
+    )
+    direct_instructions = Counter(
+        re.findall(
+            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
+            direct,
+        )
+    )
+    assert any(op.startswith("LDGSTS.") for op in direct_instructions)
+    assert direct_instructions["MUFU.TANH.BF16"] == 0
+
+
+@pytest.mark.parametrize("shape", [(1, 32), (17, 128), (137, 192)])
+def test_direct_cuda_dual_quantizer(shape):
+    from experiments.tk_mxfp8_dgrad import RowQuantizePlan
+    from experiments.tk_mxfp8_wgrad import ColumnQuantizePlan
+
+    torch.manual_seed(66)
+    x = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
+    plan = SiluBwdQuantizeLibrary().plan_direct(x)
+    row, row_scale, column, column_scale = plan()
+    expected_row, expected_row_scale = RowQuantizePlan(x)()
+    expected_column, expected_column_scale = ColumnQuantizePlan(x)()
+    torch.testing.assert_close(
+        row.view(torch.uint8), expected_row.view(torch.uint8), rtol=0, atol=0
+    )
+    torch.testing.assert_close(row_scale, expected_row_scale, rtol=0, atol=0)
+    torch.testing.assert_close(
+        column.view(torch.uint8),
+        expected_column.view(torch.uint8),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(column_scale, expected_column_scale, rtol=0, atol=0)

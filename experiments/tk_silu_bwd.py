@@ -130,9 +130,18 @@ class SiluBwdQuantizeLibrary:
         self.lib.tk_silu_bwd_q_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
         self.lib.tk_silu_bwd_q_destroy.argtypes = [ct.c_void_p]
         self.lib.tk_silu_bwd_q_error.restype = ct.c_char_p
+        if hasattr(self.lib, "tk_silu_bwd_q_create_direct"):
+            self.lib.tk_silu_bwd_q_create_direct.argtypes = [ct.c_void_p] * 5 + [
+                ct.c_int,
+                ct.c_int,
+            ]
+            self.lib.tk_silu_bwd_q_create_direct.restype = ct.c_void_p
 
     def plan(self, dy, half_gate, up):
         return SiluBwdQuantizePlan(self, dy, half_gate, up)
+
+    def plan_direct(self, x):
+        return SiluBwdDirectQuantizePlan(self, x)
 
 
 class SiluBwdQuantizePlan:
@@ -241,6 +250,70 @@ class SiluBwdQuantizePlan:
             self.up_col,
             self.up_col_scale,
         )
+
+    def __del__(self):
+        if getattr(self, "handle", None):
+            self.owner.lib.tk_silu_bwd_q_destroy(self.handle)
+            self.handle = None
+
+
+class SiluBwdDirectQuantizePlan:
+    """Direct BF16 -> dual-direction MXFP8 using the CUDA pipeline."""
+
+    def __init__(self, owner, x):
+        if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda:
+            raise ValueError("Expected CUDA BF16 X[M,K]")
+        m, k = x.shape
+        if k % 32:
+            raise ValueError("K must be a multiple of 32")
+        self.x = x
+        self.owner = owner
+        self.m, self.k = m, k
+        self.mp = (m + 127) // 128 * 128
+        self.mp16 = (m + 15) // 16 * 16
+        self.sp = (k + 15) // 16 * 16
+        self.row_fp8 = torch.empty((m, k), device=x.device, dtype=torch.float8_e4m3fn)
+        self.row_scale = torch.zeros(
+            ((k + 127) // 128, self.mp16),
+            device=x.device,
+            dtype=torch.int32,
+        )
+        self.column_fp8 = torch.empty(
+            (self.mp, k), device=x.device, dtype=torch.float8_e4m3fn
+        )
+        self.column_scale = torch.zeros(
+            (self.mp // 128, self.sp),
+            device=x.device,
+            dtype=torch.int32,
+        )
+        self.handle = owner.lib.tk_silu_bwd_q_create_direct(
+            x.data_ptr(),
+            self.row_fp8.data_ptr(),
+            self.row_scale.data_ptr(),
+            self.column_fp8.data_ptr(),
+            self.column_scale.data_ptr(),
+            m,
+            k,
+        )
+        if not self.handle:
+            raise RuntimeError(owner.lib.tk_silu_bwd_q_error().decode())
+        info = (ct.c_int * 3)()
+        owner.lib.tk_silu_bwd_q_info(self.handle, info)
+        self.info = {
+            "blocks": info[0],
+            "threads": info[1],
+            "shared_bytes": info[2],
+        }
+
+    def __call__(self):
+        self.column_scale.zero_()
+        status = self.owner.lib.tk_silu_bwd_q_launch(
+            self.handle,
+            torch.cuda.current_stream(self.x.device).cuda_stream,
+        )
+        if status:
+            raise RuntimeError(self.owner.lib.tk_silu_bwd_q_error().decode())
+        return self.row_fp8, self.row_scale, self.column_fp8, self.column_scale
 
     def __del__(self):
         if getattr(self, "handle", None):

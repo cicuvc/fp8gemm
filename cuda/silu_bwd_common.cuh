@@ -54,4 +54,13 @@ __device__ __forceinline__ uint32_t bf16x2_scale(
     return mul_bf16x2(values,uint32_t(reciprocal)|(uint32_t(reciprocal)<<16));
 }
 
+__device__ __forceinline__ uint32_t bf16x2_scale_pair(
+    uint32_t values,uint8_t exponent_low,uint8_t exponent_high) {
+    uint32_t reciprocal_low=
+        (0x7f00u-(uint32_t(exponent_low)<<7))&0x7f80u;
+    uint32_t reciprocal_high=
+        (0x7f00u-(uint32_t(exponent_high)<<7))&0x7f80u;
+    return mul_bf16x2(values,reciprocal_low|(reciprocal_high<<16));
+}
+
 } // namespace fp8gemm::silu_bwd
