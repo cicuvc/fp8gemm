@@ -194,3 +194,192 @@ class RMSNormDualQuantPlan:
             self.column_scale,
             self.inverse_rms,
         )
+
+
+@triton.jit
+def _rmsnorm_dot(
+    dy,
+    x,
+    factor,
+    dot,
+    M,
+    K,
+    dy_stride,
+    x_stride,
+    factor_stride,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK_K)
+    mask = cols < K
+    dy_values = tl.load(
+        dy + row * dy_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    x_values = tl.load(
+        x + row * x_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    scale_factor = tl.load(
+        factor + cols * factor_stride,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    tl.store(dot + row, tl.sum(dy_values * x_values * scale_factor, axis=0))
+
+
+@triton.jit
+def _rmsnorm_backward(
+    dy,
+    x,
+    factor,
+    inverse_rms,
+    dot,
+    dx,
+    factor_partial,
+    M,
+    K,
+    dy_stride,
+    x_stride,
+    dx_stride,
+    factor_stride,
+    BLOCK_K: tl.constexpr,
+):
+    row_block = tl.program_id(0)
+    col_block = tl.program_id(1)
+    rows = row_block * 32 + tl.arange(0, 32)
+    cols = col_block * BLOCK_K + tl.arange(0, BLOCK_K)
+    row_mask = rows < M
+    col_mask = cols < K
+    mask = row_mask[:, None] & col_mask[None, :]
+    dy_values = tl.load(
+        dy + rows[:, None] * dy_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    x_values = tl.load(
+        x + rows[:, None] * x_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
+    scale_factor = tl.load(
+        factor + cols * factor_stride,
+        mask=col_mask,
+        other=0.0,
+    ).to(tl.float32)
+    inverse = tl.load(
+        inverse_rms + rows,
+        mask=row_mask,
+        other=0.0,
+    ).to(tl.float32)
+    dy_scaled = dy_values * scale_factor[None, :]
+    correction = (inverse * inverse / K) * tl.load(dot + rows, mask=row_mask, other=0.0)
+    grad_x = inverse[:, None] * (
+        dy_scaled - correction[:, None] * x_values
+    )
+    tl.store(
+        dx + rows[:, None] * dx_stride + cols[None, :],
+        grad_x.to(tl.bfloat16),
+        mask=mask,
+    )
+    partial = tl.sum(dy_values * x_values * inverse[:, None], axis=0)
+    tl.store(
+        factor_partial + row_block * K + cols,
+        partial,
+        mask=col_mask,
+    )
+
+
+@triton.jit
+def _reduce_factor_grad(
+    factor_partial,
+    factor_grad,
+    row_blocks,
+    K,
+    BLOCK: tl.constexpr,
+):
+    cols = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = cols < K
+    accumulator = tl.zeros((BLOCK,), dtype=tl.float32)
+    for row_block in range(0, row_blocks):
+        accumulator += tl.load(
+            factor_partial + row_block * K + cols,
+            mask=mask,
+            other=0.0,
+        )
+    tl.store(factor_grad + cols, accumulator, mask=mask)
+
+
+class RMSNormBackwardPlan:
+    """Reusable backward from BF16 dY to BF16 dX and FP32 dFactor."""
+
+    def __init__(self, dy, x, factor, inverse_rms):
+        if (
+            dy.shape != x.shape
+            or dy.ndim != 2
+            or dy.dtype != torch.bfloat16
+            or x.dtype != torch.bfloat16
+        ):
+            raise ValueError("Expected BF16 dY and X with equal [M,K] shapes")
+        if factor.ndim != 1 or factor.shape[0] != x.shape[1]:
+            raise ValueError("Expected factor[K]")
+        if inverse_rms.shape != (x.shape[0],) or inverse_rms.dtype != torch.float32:
+            raise ValueError("Expected FP32 inverse_rms[M]")
+        if not x.is_cuda or any(
+            tensor.device != x.device
+            for tensor in [dy, factor, inverse_rms]
+        ):
+            raise ValueError("Expected all tensors on one CUDA device")
+        self.dy, self.x, self.factor = dy, x, factor
+        self.inverse_rms = inverse_rms
+        self.m, self.k = x.shape
+        self.row_blocks = (self.m + 31) // 32
+        self.dx = torch.empty_like(x)
+        self.dot = torch.empty(self.m, device=x.device, dtype=torch.float32)
+        self.factor_grad = torch.empty(self.k, device=x.device, dtype=torch.float32)
+        self.factor_partial = torch.empty(
+            (self.row_blocks, self.k), device=x.device, dtype=torch.float32
+        )
+
+    def __call__(self):
+        _rmsnorm_dot[(self.m,)](
+            self.dy,
+            self.x,
+            self.factor,
+            self.dot,
+            self.m,
+            self.k,
+            self.dy.stride(0),
+            self.x.stride(0),
+            self.factor.stride(0),
+            BLOCK_K=triton.next_power_of_2(self.k),
+        )
+        _rmsnorm_backward[(self.row_blocks, triton.cdiv(self.k, 128))](
+            self.dy,
+            self.x,
+            self.factor,
+            self.inverse_rms,
+            self.dot,
+            self.dx,
+            self.factor_partial,
+            self.m,
+            self.k,
+            self.dy.stride(0),
+            self.x.stride(0),
+            self.dx.stride(0),
+            self.factor.stride(0),
+            BLOCK_K=128,
+            num_warps=4,
+        )
+        block = 256
+        _reduce_factor_grad[(triton.cdiv(self.k, block),)](
+            self.factor_partial,
+            self.factor_grad,
+            self.row_blocks,
+            self.k,
+            BLOCK=block,
+            num_warps=4,
+        )
+        return self.dx, self.factor_grad
