@@ -72,3 +72,27 @@ def test_bf16_state_uses_half_the_memory():
     fp32_bytes = optimizer_state_nbytes(optimizer_fp32)
     bf16_bytes = optimizer_state_nbytes(optimizer_bf16)
     assert bf16_bytes * 2 == fp32_bytes
+
+
+def test_bf16_moments_support_bf16_parameters():
+    torch.manual_seed(21)
+    parameter = torch.nn.Parameter(
+        torch.randn((128, 128), device="cuda", dtype=torch.bfloat16)
+    )
+    optimizer = AdamWStateDtype(
+        [parameter],
+        lr=1e-3,
+        moment1_dtype=torch.bfloat16,
+        moment2_dtype=torch.bfloat16,
+    )
+    for _ in range(8):
+        parameter.grad = torch.randn_like(parameter)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+
+    assert parameter.dtype == torch.bfloat16
+    assert torch.isfinite(parameter).all()
+    assert optimizer_state_dtypes(optimizer) == (
+        {torch.bfloat16},
+        {torch.bfloat16},
+    )

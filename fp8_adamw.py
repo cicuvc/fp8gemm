@@ -4,11 +4,10 @@ import torch
 
 
 class AdamWStateDtype(torch.optim.Optimizer):
-    """AdamW with FP32 master parameters and configurable moment dtypes.
+    """AdamW with configurable parameter and moment dtypes.
 
-    State updates are computed in FP32 and stored back into the configured
-    moment dtype. This isolates the effect of low-precision optimizer state
-    storage from low-precision optimizer arithmetic.
+    Updates are computed in FP32. Output parameters and moments may be BF16
+    to reduce persistent optimizer and model memory.
     """
 
     def __init__(
@@ -52,13 +51,14 @@ class AdamWStateDtype(torch.optim.Optimizer):
             for parameter in group["params"]:
                 if parameter.grad is None:
                     continue
-                if parameter.dtype != torch.float32:
+                if parameter.dtype not in (torch.float32, torch.bfloat16):
                     raise TypeError(
-                        f"expected FP32 master parameter, got {parameter.dtype}"
+                        f"expected FP32 or BF16 parameter, got {parameter.dtype}"
                     )
-                if parameter.grad.dtype != torch.float32:
+                if parameter.grad.dtype != parameter.dtype:
                     raise TypeError(
-                        f"expected FP32 gradient, got {parameter.grad.dtype}"
+                        f"expected {parameter.dtype} gradient, got "
+                        f"{parameter.grad.dtype}"
                     )
                 if parameter.grad.is_sparse:
                     raise RuntimeError("sparse gradients are not supported")
@@ -77,7 +77,7 @@ class AdamWStateDtype(torch.optim.Optimizer):
 
                 state["step"] += 1
                 step = state["step"]
-                grad = parameter.grad
+                grad = parameter.grad.float()
 
                 moment1_fp32 = state["exp_avg"].float()
                 moment1_fp32.lerp_(grad, 1.0 - beta1)
@@ -101,12 +101,22 @@ class AdamWStateDtype(torch.optim.Optimizer):
                     .add_(eps)
                 )
 
-                parameter.mul_(1.0 - lr * weight_decay)
-                parameter.addcdiv_(
-                    state["exp_avg"].float(),
-                    denominator,
-                    value=-step_size,
-                )
+                if parameter.dtype == torch.float32:
+                    parameter.mul_(1.0 - lr * weight_decay)
+                    parameter.addcdiv_(
+                        state["exp_avg"].float(),
+                        denominator,
+                        value=-step_size,
+                    )
+                else:
+                    parameter_fp32 = parameter.float()
+                    parameter_fp32.mul_(1.0 - lr * weight_decay)
+                    parameter_fp32.addcdiv_(
+                        state["exp_avg"].float(),
+                        denominator,
+                        value=-step_size,
+                    )
+                    parameter.copy_(parameter_fp32)
 
         return loss
 

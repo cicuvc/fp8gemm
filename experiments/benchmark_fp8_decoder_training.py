@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from experiments.fp8_decoder_transformer import FP8DecoderTransformer
+from fp8_adamw import AdamWStateDtype, optimizer_state_nbytes
 
 
 def decoder_flops(
@@ -86,6 +87,7 @@ def main():
     parser.add_argument("--fp8-peak-tflops", type=float, default=419.0)
     parser.add_argument("--no-fused-linear-ce", action="store_true")
     parser.add_argument("--fused-ce-chunks", type=int, default=2)
+    parser.add_argument("--bf16-adam-state", action="store_true")
     parser.add_argument(
         "--output",
         default="benchmarks/fp8_decoder_training_rtx5090.json",
@@ -136,7 +138,16 @@ def main():
         loss = F.cross_entropy(logits.float(), targets)
         loss.backward()
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = (
+        AdamWStateDtype(
+            model.parameters(),
+            lr=1e-4,
+            moment1_dtype=torch.bfloat16,
+            moment2_dtype=torch.bfloat16,
+        )
+        if args.bf16_adam_state
+        else torch.optim.AdamW(model.parameters(), lr=1e-4)
+    )
     model.bind_optimizer(optimizer)
 
     def full_step():
@@ -200,6 +211,11 @@ def main():
             if args.no_fused_linear_ce
             else "fla.FusedLinearCrossEntropyLoss"
         ),
+        "optimizer": (
+            "AdamWStateDtype(BF16 moments)"
+            if args.bf16_adam_state
+            else "torch.optim.AdamW(FP32 state defaults)"
+        ),
         "config": {
             **vars(args),
             "sequence_count": sequence_count,
@@ -237,6 +253,7 @@ def main():
             }
         ),
         "full_step": metrics(full),
+        "optimizer_state_gib": optimizer_state_nbytes(optimizer) / 2**30,
         "peak_memory_gib": torch.cuda.max_memory_allocated() / 2**30,
     }
 
@@ -262,6 +279,7 @@ def main():
         else:
             print(f"{name}: unavailable ({row['unavailable']})", flush=True)
     print(f"peak_memory={result['peak_memory_gib']:.2f} GiB")
+    print(f"optimizer_state={result['optimizer_state_gib']:.2f} GiB")
 
 
 if __name__ == "__main__":
