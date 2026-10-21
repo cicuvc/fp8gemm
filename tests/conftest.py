@@ -30,6 +30,8 @@ def compiled_mxfp8_kernels():
                 tk_mxfp8_gemm.ROOT / "cuda/persistent_mxfp8_gemm.cu",
                 tk_mxfp8_gemm.ROOT / "cuda/mxfp8_configs.inc",
                 tk_mxfp8_gemm.ROOT / "cuda/mxfp8_epilogue.cuh",
+                tk_mxfp8_gemm.ROOT
+                / "third_party/thunderkittens/include/ops/group/register/tile/online_scale.cuh",
             ],
         ),
         (
@@ -73,6 +75,7 @@ def compiled_mxfp8_kernels():
                 tk_silu_bwd.ROOT / "cuda/silu_bwd_elementwise.cu",
                 tk_silu_bwd.ROOT / "cuda/silu_bwd_quantize.cu",
                 tk_silu_bwd.ROOT / "cuda/silu_bwd_common.cuh",
+                tk_silu_bwd.ROOT / "cuda/mxfp8_quantize.cuh",
             ],
         ),
         (
@@ -80,6 +83,7 @@ def compiled_mxfp8_kernels():
             tk_weight_quantize.DEFAULT_OUTPUT / "libquant.so",
             [
                 tk_weight_quantize.ROOT / "cuda/persistent_weight_quantize.cu",
+                tk_weight_quantize.ROOT / "cuda/mxfp8_quantize.cuh",
             ],
         ),
     ]

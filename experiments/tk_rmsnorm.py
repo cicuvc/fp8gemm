@@ -22,6 +22,18 @@ def _u16_max(x, y):
 
 
 @triton.jit
+def _u16_clamp_sub(x, amount):
+    return tl.inline_asm_elementwise(
+        "max.u16x2 $0, $1, $2; sub.u32 $0, $0, $2;",
+        "=r,r,r",
+        [x, amount],
+        tl.uint16,
+        True,
+        2,
+    )
+
+
+@triton.jit
 def _online_scale(x: tl.tensor):
     """Quantize a BF16 tile with one E8M0 scale per contiguous K32."""
     tl.static_assert(x.dtype == tl.bfloat16)
@@ -32,6 +44,12 @@ def _online_scale(x: tl.tensor):
         "and.b32 $0, $1, 0x7F807F80;", "=r,r", [x], tl.uint16, True, 2
     )
     scale_u16 = tl.reduce(exponents, axis=-1, combine_fn=_u16_max)
+    # E4M3 emax is 8. Bias by 7 to leave one binary exponent of headroom
+    # while using the upper safe E4M3 range.
+    scale_u16 = _u16_clamp_sub(
+        scale_u16,
+        tl.full(scale_u16.shape, 0x0380, tl.uint16),
+    )
     reciprocal = tl.inline_asm_elementwise(
         "sub.u32 $0, 0x7F007F00, $1; and.b32 $0, $0, 0x7F807F80;",
         "=r,r",

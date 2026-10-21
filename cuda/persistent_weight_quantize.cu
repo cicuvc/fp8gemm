@@ -1,5 +1,6 @@
 #include "kittens.cuh"
 #include "linear_tma_buffer.cuh"
+#include "mxfp8_quantize.cuh"
 #include "tma_ring_pipe.cuh"
 #include <stdexcept>
 #include <string>
@@ -101,16 +102,18 @@ __global__ __launch_bounds__((CW+4)*32,1) void persistent_quantize(
 #pragma unroll
                 for(int d=(Cols==128 ? 4 : 16);d;d>>=1) e=max(e,__shfl_xor_sync(0xffffffff,e,d));
             }
-            // E8M0 e=0 means 2^-127. e=254 needs a subnormal reciprocal 2^-127.
-            // No FP8-range offset; this matches the existing block-scale rule.
-            float reciprocal=__uint_as_float(e==254 ? 0x00400000u : (254u-e)<<23);
+            // E4M3 has 8 maximum exponent bits. Use the upper safe E4M3
+            // exponent range instead of normalizing amax near one.
+            uint8_t scale_e=uint8_t(quant::shift_e8m0_byte(e));
+            float reciprocal=__uint_as_float(
+                scale_e==254 ? 0x00400000u : (254u-scale_e)<<23);
             uint32_t q[Vectors];
 #pragma unroll
             for(int i=0;i<Vectors;++i) q[i]=pack_e4m3(values[i],reciprocal);
             int block_row=(task/args.tile_cols)*CW+wid;
             int block_col=(task%args.tile_cols)*(Cols/32)+(Cols==128 ? lane/8 : 0);
             if((Cols==128 ? lane%8==0 : lane==0) && block_row<args.block_rows && block_col<args.block_cols)
-                args.scales[size_t(block_row)*args.block_cols+block_col]=uint8_t(e);
+                args.scales[size_t(block_row)*args.block_cols+block_col]=scale_e;
 
             // Double-buffer output. The previous tile may still be in flight;
             // only the older group must finish reading before slot reuse.

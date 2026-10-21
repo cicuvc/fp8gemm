@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include "mxfp8_quantize.cuh"
 #include "silu_bwd_common.cuh"
 
 namespace fp8gemm::silu_bwd_quantize {
@@ -17,6 +18,8 @@ using fp8gemm::silu_bwd::backward_pair;
 using fp8gemm::silu_bwd::bf16x2_scale;
 using fp8gemm::silu_bwd::bf16x2_scale_pair;
 using fp8gemm::silu_bwd::cvt_e4m3x2_bf16x2;
+using fp8gemm::quant::shift_e8m0;
+using fp8gemm::quant::shift_e8m0_pair;
 
 static thread_local std::string error;
 
@@ -175,8 +178,8 @@ __device__ __forceinline__ void process_tile(
         }
     }
 
-    uint8_t gate_row_exp=uint8_t(gate_exponent>>7);
-    uint8_t up_row_exp=uint8_t(up_exponent>>7);
+    uint8_t gate_row_exp=uint8_t(shift_e8m0(gate_exponent)>>7);
+    uint8_t up_row_exp=uint8_t(shift_e8m0(up_exponent)>>7);
     if(row<args.m) {
         uint16_t gate_out[16],up_out[16];
 #pragma unroll
@@ -220,21 +223,24 @@ __device__ __forceinline__ void process_tile(
             uint32_t high=(gate_values[pair]>>16)&0xffffu;
             uint32_t low_exp=__reduce_max_sync(0xffffffffu,low&0x7f80u);
             uint32_t high_exp=__reduce_max_sync(0xffffffffu,high&0x7f80u);
+            uint32_t shifted_pair=shift_e8m0_pair(low_exp|(high_exp<<16));
+            uint8_t low_scale=uint8_t(shifted_pair>>7);
+            uint8_t high_scale=uint8_t(shifted_pair>>23);
             int feature_low=block_col+pair*2;
             if(lane==0) {
                 size_t offset_low=
                     size_t(tile_row/4)*args.n*4+size_t(feature_low)*4+(tile_row&3);
-                args.gate_col_scale[offset_low]=uint8_t(low_exp>>7);
-                args.gate_col_scale[offset_low+4]=uint8_t(high_exp>>7);
+                args.gate_col_scale[offset_low]=low_scale;
+                args.gate_col_scale[offset_low+4]=high_scale;
             }
             if constexpr(Transposed) {
                 uint32_t low_next=__shfl_down_sync(0xffffffffu,low,1);
                 uint32_t high_next=__shfl_down_sync(0xffffffffu,high,1);
                 if((lane&1)==0) {
                     uint16_t low_q=cvt_e4m3x2_bf16x2(
-                        bf16x2_scale(low|(low_next<<16),uint8_t(low_exp>>7)));
+                        bf16x2_scale(low|(low_next<<16),low_scale));
                     uint16_t high_q=cvt_e4m3x2_bf16x2(
-                        bf16x2_scale(high|(high_next<<16),uint8_t(high_exp>>7)));
+                        bf16x2_scale(high|(high_next<<16),high_scale));
                     size_t index=size_t(feature_low)*args.mp+block_row+lane;
                     *reinterpret_cast<uint16_t*>(args.gate_col+index)=low_q;
                     *reinterpret_cast<uint16_t*>(
@@ -242,9 +248,7 @@ __device__ __forceinline__ void process_tile(
                 }
             } else {
                 column_out[pair]=cvt_e4m3x2_bf16x2(
-                    bf16x2_scale_pair(
-                        gate_values[pair],
-                        uint8_t(low_exp>>7),uint8_t(high_exp>>7)));
+                    bf16x2_scale_pair(gate_values[pair],low_scale,high_scale));
             }
         }
         if constexpr(!Transposed) {
@@ -276,22 +280,25 @@ __device__ __forceinline__ void process_tile(
                     0xffffffffu,gate_value&0x7f80u);
                 uint32_t up_exp=__reduce_max_sync(
                     0xffffffffu,up_value&0x7f80u);
+                uint32_t shifted_pair=shift_e8m0_pair(gate_exp|(up_exp<<16));
+                uint8_t gate_scale=uint8_t(shifted_pair>>7);
+                uint8_t up_scale=uint8_t(shifted_pair>>23);
                 uint32_t gate_next=__shfl_down_sync(0xffffffffu,gate_value,1);
                 uint32_t up_next=__shfl_down_sync(0xffffffffu,up_value,1);
                 int feature=block_col+pair*2+half;
                 if(lane==0) {
                     size_t offset=
                         size_t(tile_row/4)*args.n*4+size_t(feature)*4+(tile_row&3);
-                    args.gate_col_scale[offset]=uint8_t(gate_exp>>7);
-                    args.up_col_scale[offset]=uint8_t(up_exp>>7);
+                    args.gate_col_scale[offset]=gate_scale;
+                    args.up_col_scale[offset]=up_scale;
                 }
                 if((lane&1)==0) {
                     uint32_t gate_pair=gate_value|(gate_next<<16);
                     uint32_t up_pair=up_value|(up_next<<16);
                     uint16_t gate_q=cvt_e4m3x2_bf16x2(
-                        bf16x2_scale(gate_pair,uint8_t(gate_exp>>7)));
+                        bf16x2_scale(gate_pair,gate_scale));
                     uint16_t up_q=cvt_e4m3x2_bf16x2(
-                        bf16x2_scale(up_pair,uint8_t(up_exp>>7)));
+                        bf16x2_scale(up_pair,up_scale));
                     size_t gate_index=size_t(feature)*args.mp+block_row+lane;
                     size_t up_index=size_t(feature)*args.mp+block_row+lane;
                     *reinterpret_cast<uint16_t*>(args.gate_col+gate_index)=gate_q;

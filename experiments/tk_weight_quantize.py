@@ -37,9 +37,10 @@ class QuantLibrary:
 class QuantPlan:
     """Finite FP32 weights [N,K] -> E4M3 [N,K], uint8 E8M0 [ceil(N/32),ceil(K/32)].
 
-    Scale is the maximum biased FP32 exponent in each block, with no range
-    offset; e=0 represents 2^-127. Optional round_bf16 matches the numerical
-    BF16 weight quantization contract (values must remain finite after rounding).
+    Scale is the maximum biased FP32 exponent in each block minus 7, leaving
+    one E4M3 exponent of overflow headroom; e=0 represents 2^-127. Optional
+    round_bf16 matches the numerical BF16 weight quantization contract (values
+    must remain finite after rounding).
     Input columns are contiguous, row stride is a multiple of four floats.
     Output is padded to a 16-byte row stride when necessary. Descriptor bounds
     remain logical N,K, so partial rows/columns are zero-filled on TMA loads.

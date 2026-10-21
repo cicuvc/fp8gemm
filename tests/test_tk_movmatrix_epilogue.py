@@ -22,7 +22,9 @@ pytestmark=reference_tests.pytestmark
 def compiled_movmatrix():
     torch.set_num_threads(4)
     binary=OUTPUT/'libgemm.so'
-    sources=[ROOT/'cuda/persistent_mxfp8_gemm.cu',ROOT/'cuda/mxfp8_epilogue.cuh',ROOT/'cuda/shared_store.cuh']
+    sources=[ROOT/'cuda/persistent_mxfp8_gemm.cu',ROOT/'cuda/mxfp8_epilogue.cuh',
+             ROOT/'cuda/shared_store.cuh',
+             ROOT/'third_party/thunderkittens/include/ops/group/register/tile/online_scale.cuh']
     if not binary.exists() or any(p.stat().st_mtime>binary.stat().st_mtime for p in sources):
         build(OUTPUT,movmatrix=True)
     probe=OUTPUT/'libprobe.so';source=ROOT/'cuda/probe_movmatrix_epilogue.cu'

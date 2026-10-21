@@ -35,6 +35,7 @@ __device__ __forceinline__ void quantize_output_movmatrix(
             uint32_t e=rows[0]|(rows[1]<<16);
             e=kt::detail::online_max_u16x2(e,__shfl_xor_sync(0xffffffff,e,1));
             e=kt::detail::online_max_u16x2(e,__shfl_xor_sync(0xffffffff,e,2));
+            e=kt::detail::online_shift_e8m0_u16x2(e);
             scales.data[i][k]=e>>(7+16*(lane&1));
             uint32_t rb=(0x7f007f00u-e)&0x7f807f80u;
 #pragma unroll

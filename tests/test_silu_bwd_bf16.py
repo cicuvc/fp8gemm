@@ -29,6 +29,7 @@ def compiled():
         ROOT / "cuda/silu_bwd_common.cuh",
         ROOT / "cuda/silu_bwd_elementwise.cu",
         ROOT / "cuda/silu_bwd_quantize.cu",
+        ROOT / "cuda/mxfp8_quantize.cuh",
     ]
     if any(
         not binary.exists()
@@ -166,7 +167,7 @@ def test_codegen_uses_packed_bf16_instructions():
     section = sass.split("Function : ")[1]
     instructions = Counter(
         re.findall(
-            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
+            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Za-z0-9_.]+)",
             section,
         )
     )
@@ -291,7 +292,7 @@ def test_quantized_codegen():
     )
     instructions = Counter(
         re.findall(
-            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
+            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Za-z0-9_.]+)",
             section,
         )
     )
@@ -300,6 +301,8 @@ def test_quantized_codegen():
         "HMUL2.BF16_V2",
         "MUFU.TANH.BF16",
         "REDUX.MAX",
+        "VIMNMX.U16x2",
+        "VIADD.16x2",
     ]:
         assert instructions[opcode] > 0
     assert any(opcode.startswith("LDGSTS.") for opcode in instructions)
@@ -311,7 +314,7 @@ def test_quantized_codegen():
     )
     direct_instructions = Counter(
         re.findall(
-            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Z0-9_.]+)",
+            r"/\*[0-9a-f]+\*/\s+(?:@!?U?P\d+\s+)?([A-Z][A-Za-z0-9_.]+)",
             direct,
         )
     )

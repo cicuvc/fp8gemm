@@ -14,6 +14,12 @@ __device__ __forceinline__ uint32_t online_max_u16x2(uint32_t a, uint32_t b) {
     asm("max.u16x2 %0, %1, %2;" : "=r"(d) : "r"(a), "r"(b));
     return d;
 }
+__device__ __forceinline__ uint32_t online_shift_e8m0_u16x2(uint32_t e) {
+    constexpr uint32_t packed_offset=0x03800380u;
+    uint32_t clamped;
+    asm("max.u16x2 %0, %1, %2;" : "=r"(clamped) : "r"(e), "r"(packed_offset));
+    return __vsub2(clamped,packed_offset);
+}
 
 template<typename F8>
 __device__ __forceinline__ uint16_t online_cvt_fp8x2(const bf16_2 &x, uint32_t rcp) {
@@ -31,9 +37,9 @@ __device__ __forceinline__ uint16_t online_cvt_fp8x2(const bf16_2 &x, uint32_t r
 }
 } // namespace detail
 
-/** Port of mxtest.online_scale for finite BF16 row-layout register tiles.
- * Scale is the maximum raw BF16 exponent per row/K32, WITHOUT an FP8-range
- * offset. Output has the usual TK FP8x4 MMA layout and mxfp8_scale metadata.
+/** MXFP8 quantization for finite BF16 row-layout register tiles.
+ * Scale is the maximum BF16 exponent per row/K32 minus the E4M3 exponent
+ * offset 7. Output has the usual TK FP8x4 MMA layout and mxfp8_scale metadata.
  * All 32 lanes must participate. No shared memory or block synchronization.
  *
  * Deliberately preserves the existing reciprocal bit trick, including its
@@ -71,6 +77,7 @@ __device__ __forceinline__ void online_quantize_mxfp8(
             uint32_t e = rows[0] | (rows[1] << 16);
             e = detail::online_max_u16x2(e, __shfl_xor_sync(0xffffffff, e, 1));
             e = detail::online_max_u16x2(e, __shfl_xor_sync(0xffffffff, e, 2));
+            e = detail::online_shift_e8m0_u16x2(e);
             // MMA's byte selector consumes only byte 0. Keep the other row's
             // exponent in unused upper bytes instead of spending an AND to
             // clear it. Even/odd lanes supply rows g/g+8 to the A operand.
