@@ -1,0 +1,53 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "config": {
+    "tokens": 8192,
+    "hidden": 1024,
+    "vocab": 32000,
+    "chunk_size": 1024,
+    "forward_config": 8,
+    "repeats": 10,
+    "output": "benchmarks/mxfp8_fused_ce_rtx5090_m8192_h1024_v32000.json"
+  },
+  "method": "CUDA events around loss and autograd.grad; eager dispatch; no optimizer. MXFP8 cached weight refresh excluded. Peak includes cached workspaces and inputs, measured per backend.",
+  "fla_bf16": {
+    "median_ms": 10.868319988250732,
+    "samples_ms": [
+      10.10217571258545,
+      10.904800415039062,
+      10.925951957702637,
+      9.909952163696289,
+      10.718688011169434,
+      10.924896240234375,
+      10.906496047973633,
+      11.37388801574707,
+      10.831839561462402,
+      10.789567947387695
+    ],
+    "peak_allocated_mib": 377.59814453125
+  },
+  "mxfp8": {
+    "median_ms": 6.67409610748291,
+    "samples_ms": [
+      6.4435200691223145,
+      6.319519996643066,
+      6.308063983917236,
+      6.316927909851074,
+      6.604063987731934,
+      6.744128227233887,
+      6.826111793518066,
+      6.825024127960205,
+      6.764800071716309,
+      6.754176139831543
+    ],
+    "peak_allocated_mib": 543.125
+  },
+  "accuracy_vs_fla": {
+    "mxfp8_mean_loss": 10.58234977722168,
+    "fla_mean_loss": 10.583245277404785,
+    "abs_loss_error": 0.0008955001831054688,
+    "dx_relative_l2": 0.02661026455461979,
+    "dw_relative_l2": 0.026684165000915527
+  }
+}

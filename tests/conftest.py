@@ -15,6 +15,7 @@ def compiled_mxfp8_kernels():
     from experiments import (
         tk_mxfp8_dgrad,
         tk_mxfp8_gemm,
+        tk_mxfp8_lse,
         tk_mxfp8_swiglu,
         tk_mxfp8_swiglu_dgrad,
         tk_mxfp8_wgrad,
@@ -30,8 +31,20 @@ def compiled_mxfp8_kernels():
                 tk_mxfp8_gemm.ROOT / "cuda/persistent_mxfp8_gemm.cu",
                 tk_mxfp8_gemm.ROOT / "cuda/mxfp8_configs.inc",
                 tk_mxfp8_gemm.ROOT / "cuda/mxfp8_epilogue.cuh",
+                tk_mxfp8_gemm.ROOT / "cuda/mxfp8_lse.cuh",
                 tk_mxfp8_gemm.ROOT
                 / "third_party/thunderkittens/include/ops/group/register/tile/online_scale.cuh",
+            ],
+        ),
+        (
+            tk_mxfp8_lse.build,
+            tk_mxfp8_lse.OUTPUT / "liblse.so",
+            [
+                tk_mxfp8_lse.ROOT / "cuda/persistent_mxfp8_lse.cu",
+                tk_mxfp8_lse.ROOT / "cuda/persistent_mxfp8_gemm.cu",
+                tk_mxfp8_lse.ROOT / "cuda/mxfp8_lse.cuh",
+                tk_mxfp8_lse.ROOT / "cuda/mxfp8_lse_configs.inc",
+                tk_mxfp8_lse.ROOT / "cuda/mxfp8_epilogue.cuh",
             ],
         ),
         (
