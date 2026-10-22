@@ -12,9 +12,9 @@ import triton.language as tl
 
 
 @triton.jit
-def _merge_lse(Z, Partial, Target, LSE, Loss, M: tl.constexpr,
+def _merge_lse(Z, Partial, Target, LSE, Loss, Weight, M: tl.constexpr,
                V: tl.constexpr, P: tl.constexpr, BP: tl.constexpr,
-               IGNORE_INDEX: tl.constexpr):
+               IGNORE_INDEX: tl.constexpr, HAS_WEIGHT: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     p = tl.arange(0, BP)
     local = tl.load(Partial + row * P + p, p < P, float('-inf'))
@@ -27,14 +27,17 @@ def _merge_lse(Z, Partial, Target, LSE, Loss, M: tl.constexpr,
     safe_y = tl.where(valid, y, 0)
     zy = tl.load(Z + row * V + safe_y, valid, float('nan')).to(tl.float32)
     tl.store(LSE + row, lse)
-    tl.store(Loss + row, tl.where(ignored, 0., lse - zy))
+    loss = tl.where(ignored, 0., lse - zy)
+    if HAS_WEIGHT:
+        loss *= tl.load(Weight + row)
+    tl.store(Loss + row, loss)
 
 
 @triton.jit
-def _ce_dual_quantize(Z, LSE, Target, Row, RowScale, Col, ColScale,
+def _ce_dual_quantize(Z, LSE, Target, Weight, Row, RowScale, Col, ColScale,
                       M: tl.constexpr, V: tl.constexpr, MP: tl.constexpr,
                       MP16: tl.constexpr, VP16: tl.constexpr,
-                      IGNORE_INDEX: tl.constexpr):
+                      IGNORE_INDEX: tl.constexpr, HAS_WEIGHT: tl.constexpr):
     # Each program owns one 32x32 tile: complete groups in both directions.
     tm = tl.program_id(0).to(tl.int64)
     tv = tl.program_id(1).to(tl.int64)
@@ -49,6 +52,9 @@ def _ce_dual_quantize(Z, LSE, Target, Row, RowScale, Col, ColScale,
     # Zero before either scale reduction, including when ignore_index is a
     # vocabulary ID. Ignored rows must not affect a column's quantization scale.
     g = tl.where(active[:, None] & (cols[None, :] < V), g, 0)
+    if HAS_WEIGHT:
+        weight = tl.load(Weight + rows, rows < M, 0)
+        g *= weight[:, None]
     # Match the existing BF16 -> MXFP8 quantizer, including its rounding point.
     g = g.to(tl.bfloat16).to(tl.float32)
     exponent = (g.to(tl.int32, bitcast=True) >> 23) & 255
@@ -68,7 +74,7 @@ def _ce_dual_quantize(Z, LSE, Target, Row, RowScale, Col, ColScale,
              ec.to(tl.uint8), cols < VP16)
 
 
-def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=-100):
+def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=-100, row_weight=None):
     """Merge GEMM partials and gather the target logit; return FP32 [M] tensors."""
     m, v = logits.shape
     if (logits.dtype != torch.bfloat16 or not logits.is_cuda or
@@ -79,6 +85,7 @@ def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=
             not partial_lse.is_contiguous() or partial_lse.device != logits.device):
         raise ValueError("Expected contiguous FP32 partial_lse[M,P]")
     _validate_target(target, m, logits.device)
+    _validate_row_weight(row_weight, m, logits.device)
     _validate_ignore_index(ignore_index)
     if lse is None:
         lse = torch.empty(m, device=logits.device, dtype=torch.float32)
@@ -89,8 +96,8 @@ def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=
             raise ValueError("Expected contiguous FP32 output[M]")
     p = partial_lse.shape[1]
     with torch.cuda.device(logits.device):
-        _merge_lse[(m,)](logits, partial_lse, target, lse, loss, m, v, p,
-                         triton.next_power_of_2(p), ignore_index)
+        _merge_lse[(m,)](logits, partial_lse, target, lse, loss, row_weight, m, v, p,
+                         triton.next_power_of_2(p), ignore_index, row_weight is not None)
     return lse, loss
 
 
@@ -103,6 +110,14 @@ def _validate_target(target, m, device):
 def _validate_ignore_index(ignore_index):
     if type(ignore_index) is not int or not -(2**63) <= ignore_index < 2**63:
         raise ValueError("ignore_index must be a signed int64 integer")
+
+
+def _validate_row_weight(row_weight, m, device):
+    if row_weight is not None and (
+        row_weight.shape != (m,) or row_weight.dtype != torch.float32 or
+        row_weight.device != device or not row_weight.is_contiguous()
+    ):
+        raise ValueError("Expected contiguous FP32 row_weight[M] on logits device")
 
 
 class CEPlan:
@@ -118,7 +133,7 @@ class CEPlan:
         self.row_scale = torch.zeros((triton.cdiv(v, 128), self.mp16), device=device, dtype=torch.int32)
         self.column_scale = torch.zeros((self.mp // 128, self.vp16), device=device, dtype=torch.int32)
 
-    def __call__(self, logits, lse, target, *, ignore_index=-100):
+    def __call__(self, logits, lse, target, *, ignore_index=-100, row_weight=None):
         if (logits.shape != (self.m, self.v) or logits.dtype != torch.bfloat16 or
                 logits.device != self.row_fp8.device or not logits.is_contiguous()):
             raise ValueError("Expected contiguous BF16 logits matching the CE plan")
@@ -126,12 +141,13 @@ class CEPlan:
                 lse.device != logits.device or not lse.is_contiguous()):
             raise ValueError("Expected contiguous FP32 LSE[M]")
         _validate_target(target, self.m, logits.device)
+        _validate_row_weight(row_weight, self.m, logits.device)
         _validate_ignore_index(ignore_index)
         with torch.cuda.device(logits.device):
             _ce_dual_quantize[(self.mp // 32, triton.cdiv(self.v, 32))](
-                logits, lse, target, self.row_fp8, self.row_scale.view(torch.uint8),
+                logits, lse, target, row_weight, self.row_fp8, self.row_scale.view(torch.uint8),
                 self.column_fp8, self.column_scale.view(torch.uint8),
-                self.m, self.v, self.mp, self.mp16, self.vp16, ignore_index, num_warps=4,
+                self.m, self.v, self.mp, self.mp16, self.vp16, ignore_index, row_weight is not None, num_warps=4,
                 enable_fp_fusion=False,
             )
         return self.row_fp8, self.row_scale, self.column_fp8, self.column_scale

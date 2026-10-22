@@ -1,16 +1,16 @@
 """Experimental chunked MXFP8 LM head + cross entropy on SM120.
 
-Returns a scalar SUM of non-ignored token losses; divide it externally by the
-valid token count for a mean. No bias, smoothing, or reduction option.
+By default returns a scalar SUM of non-ignored token losses. balance="token"
+averages valid tokens; balance="document" averages the per-document valid-token
+means, excluding empty/all-ignored documents. No bias or smoothing option.
 Forward computes first-order dX/dW
 chunk by chunk; backward only scales the saved gradients. Z is BF16, LSE/loss
 are FP32, and dZ is independently MXFP8-quantized along both GEMM reduction axes.
 
 Example::
 
-    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=1024, ignore_index=-100)
+    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=1024, balance="token")
     loss = criterion(hidden_bf16, targets_int64, lm_head_weight)
-    loss = loss / targets_int64.ne(-100).sum().clamp_min(1)
     loss.backward()
 
 Weights may be FP32 masters or BF16 (including a tied embedding parameter).
@@ -25,6 +25,7 @@ from torch.autograd.function import once_differentiable
 
 from experiments.mxfp8_core import quantize_weight
 from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target, _validate_ignore_index
+from experiments.mxfp8_balance import document_weights, reduce_balanced_loss, validate_cu_seqlens
 from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
@@ -53,7 +54,7 @@ class _ChunkState:
             config=module.dw_config, raster_group=module.raster_group,
         )
 
-    def __call__(self, x, target, w, ws, ignore_index):
+    def __call__(self, x, target, w, ws, ignore_index, row_weight=None):
         self.xq.rebind(x)
         self.gemm.rebind(self.xq.row_fp8, w, self.xq.row_scale, ws)
         self.dx.rebind(self.ce.row_fp8, w, self.ce.row_scale, ws)
@@ -61,8 +62,8 @@ class _ChunkState:
             self.xq()
             logits, partial = self.gemm()
             merge_lse(logits, partial, target, lse=self.lse, loss=self.loss,
-                      ignore_index=ignore_index)
-            self.ce(logits, self.lse, target, ignore_index=ignore_index)
+                      ignore_index=ignore_index, row_weight=row_weight)
+            self.ce(logits, self.lse, target, ignore_index=ignore_index, row_weight=row_weight)
             return self.loss, self.dx(), self.dw()
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
@@ -74,31 +75,45 @@ class _ChunkState:
 
 class _FusedCEFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, target, weight, wq, ws, module):
+    def forward(ctx, x, target, weight, wq, ws, module, cu_seqlens):
         dx = torch.empty_like(x)
         dw = torch.zeros_like(weight, dtype=torch.float32)
         losses = torch.empty(x.shape[0], device=x.device, dtype=torch.float32)
+        row_weight = doc_counts = None
         with torch.cuda.device(x.device):
+            if module.balance == "document":
+                row_weight, doc_counts = document_weights(
+                    target, cu_seqlens, ignore_index=module.ignore_index,
+                )
             for start in range(0, x.shape[0], module.chunk_size):
                 end = min(start + module.chunk_size, x.shape[0])
                 c_x = x[start:end]
                 state = module._state(c_x, wq, ws)
-                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index)
+                c_weight = None if row_weight is None else row_weight[start:end]
+                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index, c_weight)
                 losses[start:end].copy_(c_loss)
                 dx[start:end].copy_(c_dx)
                 dw.add_(c_dw)
         # Independent storage: future forwards may immediately reuse every plan.
         # Accumulate dW in FP32 and cast only after all chunks have contributed.
-        ctx.save_for_backward(dx, dw.to(weight.dtype))
-        return losses.sum()
+        if module.balance is None:
+            loss, inv = losses.sum(), None
+        else:
+            loss, inv = reduce_balanced_loss(
+                losses, target, balance=module.balance, doc_counts=doc_counts,
+                ignore_index=module.ignore_index,
+            )
+        ctx.save_for_backward(dx, dw.to(weight.dtype), inv)
+        return loss
 
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
-        dx, dw = ctx.saved_tensors
+        dx, dw, inv = ctx.saved_tensors
         # No host read of grad_output, and no mutation of saved tensors: CUDA
         # Graph capture and repeated backward with different scalars both work.
-        return dx * grad_output, None, dw * grad_output, None, None, None
+        scale = grad_output if inv is None else grad_output * inv
+        return dx * scale, None, dw * scale, None, None, None, None
 
 
 class MXFP8FusedLinearCrossEntropy(nn.Module):
@@ -111,13 +126,23 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     selected GEMM panels. Default configs require multiples of 128. A final
     short token chunk is supported via the quantizer's zero padding.
 
+    balance=None preserves summed loss. "token" divides by valid token count;
+    "document" uses cu_seqlens[D+1] (CUDA int32/int64) to weight each nonempty
+    document equally by its valid-token mean. Boundaries cover [0,M], are
+    nondecreasing, and describe documents, not arbitrary attention segments.
+    Repeated boundaries (empty documents) are allowed. Normalization is over
+    this invocation, not across gradient-accumulation steps or distributed ranks.
+
     Warm up once for each shape before CUDA Graph capture. This object owns
     mutable scratch buffers and must not be called concurrently on two streams.
     Only first-order differentiation is supported, as in the existing linear.
     """
     def __init__(self, *, chunk_size=1024, forward_config=8, dx_config=12,
-                 dw_config=12, raster_group=13, ignore_index=-100):
+                 dw_config=12, raster_group=13, ignore_index=-100, balance=None):
         super().__init__()
+        if balance not in (None, "token", "document"):
+            raise ValueError("balance must be None, 'token', or 'document'")
+        self.balance = balance
         _validate_ignore_index(ignore_index)
         self.ignore_index = ignore_index
         if type(chunk_size) is not int or chunk_size <= 0 or chunk_size % 128:
@@ -144,7 +169,7 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         """Drop cached per-shape workspaces outside CUDA Graph capture/replay."""
         self._states.clear()
 
-    def forward(self, x, target, weight, *, quantized_weight=None):
+    def forward(self, x, target, weight, *, quantized_weight=None, cu_seqlens=None):
         if (x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda or
                 not x.is_contiguous() or min(x.shape) <= 0):
             raise ValueError("Expected nonempty contiguous CUDA BF16 X[M,H]")
@@ -157,6 +182,8 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         if torch.cuda.get_device_capability(x.device) != (12, 0):
             raise RuntimeError("SM120 required")
         _validate_target(target, x.shape[0], x.device)
+        if self.balance == "document" or cu_seqlens is not None:
+            validate_cu_seqlens(cu_seqlens, x.device)
         if quantized_weight is None:
             with torch.no_grad():
                 wq, ws = quantize_weight(weight.detach().float())
@@ -167,14 +194,15 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
                     ws.dtype != torch.uint8 or wq.device != x.device or ws.device != x.device or
                     not wq.is_contiguous() or not ws.is_contiguous()):
                 raise ValueError("Invalid quantized weight cache")
-        return _FusedCEFunction.apply(x, target, weight, wq, ws, self)
+        return _FusedCEFunction.apply(x, target, weight, wq, ws, self, cu_seqlens)
 
 
 def fused_linear_cross_entropy_loss(x, target, weight, *, chunk_size=1024,
                                     forward_config=8, dx_config=12, dw_config=12,
-                                    raster_group=13, quantized_weight=None, ignore_index=-100):
-    """One-shot scalar summed CE; use the module to reuse plans across calls."""
+                                    raster_group=13, quantized_weight=None, ignore_index=-100,
+                                    balance=None, cu_seqlens=None):
+    """One-shot scalar CE with optional balance; use the module to reuse plans."""
     return MXFP8FusedLinearCrossEntropy(
         chunk_size=chunk_size, forward_config=forward_config, dx_config=dx_config,
-        dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index,
-    )(x, target, weight, quantized_weight=quantized_weight)
+        dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index, balance=balance,
+    )(x, target, weight, quantized_weight=quantized_weight, cu_seqlens=cu_seqlens)
