@@ -11,7 +11,7 @@ from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
 from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
-from experiments.tk_mxfp8_fused_ce import MXFP8FusedLinearCrossEntropy
+from experiments.tk_mxfp8_fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
@@ -87,7 +87,7 @@ def test_ce_dual_quantization_matches_cuda(m, v, uniform):
     torch.testing.assert_close(z, saved_z, rtol=0, atol=0)
 
 
-def component_reference(x, w, y, chunk_size, configs=(8, 12, 12)):
+def component_reference(x, w, y, chunk_size, configs=(8, 12, 12), ignore_index=-100):
     """Independent chain: plain GEMM -> PyTorch CE math -> CUDA quantizer."""
     wq, ws = quantize_weight(w.float())
     dx = torch.empty_like(x)
@@ -98,9 +98,12 @@ def component_reference(x, w, y, chunk_size, configs=(8, 12, 12)):
         xq = SiluBwdQuantizeLibrary().plan_direct(x[start:end])
         xq()
         z = GemmLibrary().plan(xq.row_fp8, wq, xq.row_scale, ws, config=configs[0])()
-        losses.append(F.cross_entropy(z.float(), y[start:end], reduction="sum"))
+        targets = y[start:end]
+        valid = targets != ignore_index
+        losses.append(F.cross_entropy(z.float(), targets, reduction="sum", ignore_index=ignore_index))
         g = torch.exp(z.float() - z.float().logsumexp(-1)[:, None])
-        g[torch.arange(end-start, device=x.device), y[start:end]] -= 1
+        g[torch.arange(end-start, device=x.device)[valid], targets[valid]] -= 1
+        g[~valid] = 0
         gq = SiluBwdQuantizeLibrary().plan_direct(g.bfloat16(), transpose=True)
         gq()
         dx[start:end] = DgradLibrary().plan(gq.row_fp8, wq, gq.row_scale, ws, config=configs[1])()
@@ -155,11 +158,13 @@ def test_bf16_reference_accuracy_and_tied_weight():
     assert w.grad is not None and torch.isfinite(w.grad).all()
 
 
-def test_cuda_graph_replay_with_new_inputs_and_weight_cache():
+@pytest.mark.parametrize("ignore_index", [None, -100, 0])
+def test_cuda_graph_replay_with_new_inputs_and_weight_cache(ignore_index):
     x, w, y = inputs(137, 128, 256)
     x.requires_grad_(); w.requires_grad_()
     wq, ws = quantize_weight(w.detach())
-    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128)
+    kwargs = {} if ignore_index is None else {"ignore_index": ignore_index}
+    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, **kwargs)
     def step():
         loss = criterion(x, y, w, quantized_weight=(wq, ws))
         dx, dw = torch.autograd.grad(loss / len(x), (x, w))
@@ -177,6 +182,11 @@ def test_cuda_graph_replay_with_new_inputs_and_weight_cache():
         with torch.no_grad():
             x.add_(.125)
             y.copy_((y + 17) % w.shape[0])
+            if ignore_index is not None:
+                if i == 0:
+                    y.fill_(ignore_index)
+                else:
+                    y[::3] = ignore_index
             w.add_(.001)
             new_q, new_s = quantize_weight(w.detach())
             wq.copy_(new_q); ws.copy_(new_s)
@@ -184,6 +194,8 @@ def test_cuda_graph_replay_with_new_inputs_and_weight_cache():
         graph.replay()
         for actual, reference in zip(captured, expected):
             torch.testing.assert_close(actual, reference, atol=0, rtol=0)
+            if ignore_index is not None and i == 0:
+                assert torch.count_nonzero(actual).item() == 0
 
 
 def test_input_contract():
@@ -197,6 +209,9 @@ def test_input_contract():
         criterion(x, y.int(), w)
     with pytest.raises(ValueError, match="multiples of 64"):
         criterion(x, y, w[:255])
+    for invalid in (True, 1.5, 2**63, -(2**63)-1):
+        with pytest.raises(ValueError, match="ignore_index"):
+            MXFP8FusedLinearCrossEntropy(ignore_index=invalid)
 
 
 def test_saved_gradients_and_chunk_workspace_bound():
@@ -215,3 +230,79 @@ def test_saved_gradients_and_chunk_workspace_bound():
     criterion.clear_workspace()
     loss.backward()
     assert torch.isfinite(x.grad).all() and torch.isfinite(w.grad).all()
+
+
+@pytest.mark.parametrize("ignore_index", [-100, 0, 999, 2**40, -(2**63), 2**63-1])
+def test_ignore_loss_and_dual_quantization_reuse(ignore_index):
+    m, v = 137, 128
+    z = torch.zeros((m, v), device="cuda", dtype=torch.bfloat16)
+    partial = z.float().reshape(m, 4, 32).logsumexp(-1)
+    plan = CEPlan(m, v, z.device)
+    # Active -> mixed -> all ignored -> active verifies workspace overwrites,
+    # including complete ignored 32-token quantization groups and a short tail.
+    for mode in ("active", "mixed", "all", "active"):
+        y = torch.arange(m, device="cuda") % v
+        if mode == "mixed":
+            y[:32] = ignore_index
+            y[63:66] = ignore_index
+            y[127:] = ignore_index
+        elif mode == "all":
+            y.fill_(ignore_index)
+        ignored = y == ignore_index
+        lse, loss = merge_lse(z, partial, y, ignore_index=ignore_index)
+        expected_loss = F.cross_entropy(z.float(), y, reduction="none", ignore_index=ignore_index)
+        torch.testing.assert_close(loss, expected_loss, atol=1e-6, rtol=1e-6)
+        assert torch.count_nonzero(loss[ignored]).item() == 0
+        g = z.float().softmax(-1)
+        rows = torch.arange(m, device="cuda")[~ignored]
+        g[rows, y[~ignored]] -= 1
+        g[ignored] = 0
+        ref = SiluBwdQuantizeLibrary().plan_direct(g.bfloat16(), transpose=True)
+        ref()
+        plan(z, lse, y, ignore_index=ignore_index)
+        for name in ("row_fp8", "column_fp8", "row_scale", "column_scale"):
+            torch.testing.assert_close(getattr(plan, name).view(torch.uint8),
+                                       getattr(ref, name).view(torch.uint8), atol=0, rtol=0)
+        assert torch.count_nonzero(plan.row_fp8.float()[ignored]).item() == 0
+        assert torch.count_nonzero(plan.column_fp8.float()[:, :m][:, ignored]).item() == 0
+
+
+@pytest.mark.parametrize("ignore_index", [-100, 0, 999])
+@pytest.mark.parametrize("all_ignored", [False, True])
+def test_ignore_chunked_gradients(ignore_index, all_ignored):
+    x, w, y = inputs(257, 128, 256)
+    if all_ignored:
+        y.fill_(ignore_index)
+    else:
+        # Whole first chunk, mixed second chunk, and ignored final short chunk.
+        y[:128] = ignore_index
+        y[::3] = ignore_index
+        y[-1] = ignore_index
+    expected = component_reference(x, w, y, 128, ignore_index=ignore_index)
+    x.requires_grad_(); w.requires_grad_()
+    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, ignore_index=ignore_index)
+    loss = criterion(x, y, w)
+    dx, dw = torch.autograd.grad(loss, (x, w), retain_graph=True)
+    torch.testing.assert_close(loss, expected[0], atol=2e-4, rtol=2e-6)
+    assert torch.count_nonzero(dx[y == ignore_index]).item() == 0
+    for actual, ref in zip((dx, dw), expected[1:]):
+        if all_ignored:
+            torch.testing.assert_close(actual, torch.zeros_like(actual), atol=0, rtol=0)
+        else:
+            assert ((actual.float()-ref.float()).norm()/ref.float().norm()).item() < 2e-3
+    if all_ignored:
+        assert loss.item() == 0
+    # Functional entry point and post-forward scalar weighting share the API.
+    one_shot = fused_linear_cross_entropy_loss(x, y, w, chunk_size=128, ignore_index=ignore_index)
+    torch.testing.assert_close(one_shot, loss, atol=0, rtol=0)
+    scaled = torch.autograd.grad(loss * .25, (x, w))
+    for actual, ref in zip(scaled, (dx, dw)):
+        torch.testing.assert_close(actual, ref * .25, atol=0, rtol=0)
+
+
+def test_ignore_index_defaults_to_minus_100():
+    x, w, y = inputs(137, 128, 256)
+    y[::2] = -100
+    implicit = fused_linear_cross_entropy_loss(x, y, w, chunk_size=128)
+    explicit = fused_linear_cross_entropy_loss(x, y, w, chunk_size=128, ignore_index=-100)
+    torch.testing.assert_close(implicit, explicit, atol=0, rtol=0)

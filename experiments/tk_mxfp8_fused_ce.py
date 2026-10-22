@@ -1,14 +1,16 @@
 """Experimental chunked MXFP8 LM head + cross entropy on SM120.
 
-Returns a scalar SUM of token losses; divide it externally for a mean. No bias,
-ignore_index, smoothing, or reduction option. Forward computes first-order dX/dW
+Returns a scalar SUM of non-ignored token losses; divide it externally by the
+valid token count for a mean. No bias, smoothing, or reduction option.
+Forward computes first-order dX/dW
 chunk by chunk; backward only scales the saved gradients. Z is BF16, LSE/loss
 are FP32, and dZ is independently MXFP8-quantized along both GEMM reduction axes.
 
 Example::
 
-    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=1024)
-    loss = criterion(hidden_bf16, targets_int64, lm_head_weight) / hidden_bf16.shape[0]
+    criterion = MXFP8FusedLinearCrossEntropy(chunk_size=1024, ignore_index=-100)
+    loss = criterion(hidden_bf16, targets_int64, lm_head_weight)
+    loss = loss / targets_int64.ne(-100).sum().clamp_min(1)
     loss.backward()
 
 Weights may be FP32 masters or BF16 (including a tied embedding parameter).
@@ -22,7 +24,7 @@ from torch import nn
 from torch.autograd.function import once_differentiable
 
 from experiments.mxfp8_core import quantize_weight
-from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target
+from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target, _validate_ignore_index
 from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
 from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
@@ -51,15 +53,16 @@ class _ChunkState:
             config=module.dw_config, raster_group=module.raster_group,
         )
 
-    def __call__(self, x, target, w, ws):
+    def __call__(self, x, target, w, ws, ignore_index):
         self.xq.rebind(x)
         self.gemm.rebind(self.xq.row_fp8, w, self.xq.row_scale, ws)
         self.dx.rebind(self.ce.row_fp8, w, self.ce.row_scale, ws)
         try:
             self.xq()
             logits, partial = self.gemm()
-            merge_lse(logits, partial, target, lse=self.lse, loss=self.loss)
-            self.ce(logits, self.lse, target)
+            merge_lse(logits, partial, target, lse=self.lse, loss=self.loss,
+                      ignore_index=ignore_index)
+            self.ce(logits, self.lse, target, ignore_index=ignore_index)
             return self.loss, self.dx(), self.dw()
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
@@ -80,7 +83,7 @@ class _FusedCEFunction(torch.autograd.Function):
                 end = min(start + module.chunk_size, x.shape[0])
                 c_x = x[start:end]
                 state = module._state(c_x, wq, ws)
-                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws)
+                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index)
                 losses[start:end].copy_(c_loss)
                 dx[start:end].copy_(c_dx)
                 dw.add_(c_dw)
@@ -102,7 +105,9 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     """Reusable sequential-stream criterion, with bounded per-chunk workspaces.
 
     X must be contiguous BF16 [M,H], W contiguous FP32/BF16 [V,H], and targets
-    contiguous int64 [M] in [0,V). H/V must be multiples of 64 and satisfy the
+    contiguous int64 [M] in [0,V) or equal to ignore_index (default -100).
+    Ignored rows contribute zero loss and gradients; all-ignored inputs return
+    zero loss and gradients as well. H/V must be multiples of 64 and satisfy the
     selected GEMM panels. Default configs require multiples of 128. A final
     short token chunk is supported via the quantizer's zero padding.
 
@@ -111,8 +116,10 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     Only first-order differentiation is supported, as in the existing linear.
     """
     def __init__(self, *, chunk_size=1024, forward_config=8, dx_config=12,
-                 dw_config=12, raster_group=13):
+                 dw_config=12, raster_group=13, ignore_index=-100):
         super().__init__()
+        _validate_ignore_index(ignore_index)
+        self.ignore_index = ignore_index
         if type(chunk_size) is not int or chunk_size <= 0 or chunk_size % 128:
             raise ValueError("chunk_size must be a positive multiple of 128")
         if type(forward_config) is not int or forward_config not in CONFIGS:
@@ -165,9 +172,9 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
 
 def fused_linear_cross_entropy_loss(x, target, weight, *, chunk_size=1024,
                                     forward_config=8, dx_config=12, dw_config=12,
-                                    raster_group=13, quantized_weight=None):
+                                    raster_group=13, quantized_weight=None, ignore_index=-100):
     """One-shot scalar summed CE; use the module to reuse plans across calls."""
     return MXFP8FusedLinearCrossEntropy(
         chunk_size=chunk_size, forward_config=forward_config, dx_config=dx_config,
-        dw_config=dw_config, raster_group=raster_group,
+        dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index,
     )(x, target, weight, quantized_weight=quantized_weight)
