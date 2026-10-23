@@ -5,6 +5,7 @@
 #include "mxfp8_epilogue.cuh"
 #include "mxfp8_lse.cuh"
 #include <stdexcept>
+#include <cmath>
 #include <string>
 #ifndef FP8GEMM_FACTORED_STORES
 #define FP8GEMM_FACTORED_STORES 0
@@ -24,8 +25,9 @@ __device__ __forceinline__ int2 mx_raster(int task,int ntiles,int mtiles,int g) 
     int span=g*ntiles,first=task/span*g,rows=min(g,mtiles-first),local=task%span;
     return make_int2(first+local%rows,local/rows);
 }
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false> struct MXConfig {
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false> struct MXConfig {
     static_assert(!OnlyQ || SaveQ);
+    static_assert(!Softcap || SaveLSE);
     using ATile=kt::st_fp8e4m3<4*R,BK>;
     using BTile=kt::st_fp8e4m3<C,BK>;
     using OTile=kt::st_bf<4*R,C>;
@@ -33,7 +35,7 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
     union OutputStorage {OTile bf;QTile q;};
     struct QuantizedArgs {MXGlobal<QTile> out;uint32_t *scales;};
     struct NoQuantizedArgs {};
-    struct LSEArgs {float *data;};
+    struct LSEArgs {float *data;float softcap;};
     static constexpr int SC=BK/32,SR=(C+31)/32;
     struct Packet {
         ATile a[2];BTile b;
@@ -71,10 +73,10 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
         }
     };
 };
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false>
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
-    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE>::Args args) {
-    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE>;using Shared=typename CF::Shared;
+    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>::Args args) {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>;using Shared=typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid(),lane=threadIdx.x%32;
@@ -135,7 +137,7 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
                 kt::warp::wmma::mma_ABt_block_scaled(accum,ar,br,accum,as,bs);
             }
             if constexpr(SaveLSE)
-                store_partial_lse(accum,args.lse.data,mr,nc,args.m,args.n);
+                store_partial_lse<R,C,Softcap>(accum,args.lse.data,mr,nc,args.m,args.n,args.lse.softcap);
             if constexpr(SaveQ) {
                 kt::rt_bf<R,C> rounded;
                 kt::warp::copy(rounded,accum);
@@ -211,10 +213,10 @@ struct MXPlanBase {
     virtual void info(int*)=0;
     virtual void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs,void*l=nullptr)=0;
 };
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false> struct MXPlan:MXPlanBase {
-    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE>;typename CF::Args args;int grid,regs;
-    static auto lse_args(void *l) {
-        if constexpr(SaveLSE)return typename CF::LSEArgs{static_cast<float*>(l)};
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false> struct MXPlan:MXPlanBase {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>;typename CF::Args args;int grid,regs;
+    static auto lse_args(void *l,float softcap) {
+        if constexpr(SaveLSE)return typename CF::LSEArgs{static_cast<float*>(l),softcap};
         else return typename CF::NoQuantizedArgs{};
     }
     static auto bf16_args(void *o,int m,int n) {
@@ -234,24 +236,24 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
         } else return typename CF::NoQuantizedArgs{};
     }
     MXPlan(void *a,void *b,void *as,void *bs,void *o,int m,int n,int k,int sms,int g,
-           void *q=nullptr,void *qs=nullptr,void *l=nullptr):
+           void *q=nullptr,void *qs=nullptr,void *l=nullptr,float softcap=0.f):
         args{MXGlobal<typename CF::ATile>((kt::fp8e4m3*)a,1,1,m,k),
              MXGlobal<typename CF::BTile>((kt::fp8e4m3*)b,1,1,n,k),
              bf16_args(o,m,n),
              (uint32_t*)as,
              (uint8_t*)bs,m,n,(k+31)/32,(n+C-1)/C,(m+8*R-1)/(8*R),
              ((m+8*R-1)/(8*R))*((n+C-1)/C),(k+BK-1)/BK,std::min(g,(m+8*R-1)/(8*R)),
-             uint32_t((m+15)/16*16),lse_args(l),quantized_args(q,qs,m,n)} {
+             uint32_t((m+15)/16*16),lse_args(l,softcap),quantized_args(q,qs,m,n)} {
         if(k%CF::ATile::swizzle_bytes || k%CF::BTile::swizzle_bytes || (!OnlyQ && n%(CF::OTile::swizzle_bytes/2)))
             throw std::runtime_error("K/N must align to TMA swizzle panels");
         int dev;mx_check(cudaGetDevice(&dev));cudaDeviceProp prop;mx_check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE>));regs=attr.numRegs;
+        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>));regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)throw std::runtime_error("Unexpected register pool or local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
+        persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
     void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs,void*l=nullptr) override {
@@ -261,7 +263,7 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
         args.as=(uint32_t*)as;
         args.bs=(uint8_t*)bs;
         args.q=quantized_args(q,qs,args.m,args.n);
-        args.lse=lse_args(l);
+        if constexpr(SaveLSE)args.lse.data=static_cast<float*>(l);
     }
 };
 static thread_local std::string mx_error;
@@ -313,19 +315,25 @@ extern "C" void tk_mx_info(fp8gemm::MXPlanBase *p,int *d){p->info(d);}
 extern "C" void tk_mx_destroy(fp8gemm::MXPlanBase *p){delete p;}
 
 #ifdef FP8GEMM_LSE_ONLY
-extern "C" void *tk_mx_create_lse(void *a,void *b,void *as,void *bs,void *o,
-    void *l,int m,int n,int k,int config,int sms,int g) {
+extern "C" void *tk_mx_create_lse_softcap(void *a,void *b,void *as,void *bs,void *o,
+    void *l,int m,int n,int k,int config,int sms,int g,float softcap) {
     using namespace fp8gemm;
     try {
-        if(!a||!b||!as||!bs||!o||!l||m<=0||n<=0||k<=0||g<1)
+        if(!a||!b||!as||!bs||!o||!l||m<=0||n<=0||k<=0||g<1||!std::isfinite(softcap)||softcap<0.f)
             throw std::runtime_error("Invalid arguments");
-#define CFG(I,R,C,K,S) case I:return new MXPlan<R,C,K,S,false,false,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l)
+#define CFG(I,R,C,K,S) case I: \
+        if(softcap>0.f)return new MXPlan<R,C,K,S,false,false,true,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l,softcap); \
+        return new MXPlan<R,C,K,S,false,false,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l)
         switch(config) {
 #include "mxfp8_lse_configs.inc"
             default:throw std::runtime_error("Invalid LSE configuration");
         }
 #undef CFG
     }catch(const std::exception &e){mx_error=e.what();return nullptr;}
+}
+extern "C" void *tk_mx_create_lse(void *a,void *b,void *as,void *bs,void *o,
+    void *l,int m,int n,int k,int config,int sms,int g) {
+    return tk_mx_create_lse_softcap(a,b,as,bs,o,l,m,n,k,config,sms,g,0.f);
 }
 extern "C" int tk_mx_rebind_lse(fp8gemm::MXPlanBase *p,
     void*a,void*b,void*as,void*bs,void*o,void*l) {

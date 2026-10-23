@@ -24,7 +24,7 @@ from torch import nn
 from torch.autograd.function import once_differentiable
 
 from experiments.mxfp8_core import quantize_weight
-from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target, _validate_ignore_index
+from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target, _validate_ignore_index, _validate_softcap
 from experiments.mxfp8_balance import document_weights, reduce_balanced_loss, validate_cu_seqlens
 from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
 from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
@@ -38,6 +38,7 @@ class _ChunkState:
         self.gemm = module._gemm.plan(
             self.xq.row_fp8, w, self.xq.row_scale, ws,
             config=module.forward_config, raster_group=module.raster_group,
+            softcap=module.softcap,
         )
         m, h = x.shape
         v = w.shape[0]
@@ -62,8 +63,9 @@ class _ChunkState:
             self.xq()
             logits, partial = self.gemm()
             merge_lse(logits, partial, target, lse=self.lse, loss=self.loss,
-                      ignore_index=ignore_index, row_weight=row_weight)
-            self.ce(logits, self.lse, target, ignore_index=ignore_index, row_weight=row_weight)
+                      ignore_index=ignore_index, row_weight=row_weight, softcap=self.gemm.softcap)
+            self.ce(logits, self.lse, target, ignore_index=ignore_index, row_weight=row_weight,
+                    softcap=self.gemm.softcap)
             return self.loss, self.dx(), self.dw()
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
@@ -133,13 +135,20 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     Repeated boundaries (empty documents) are allowed. Normalization is over
     this invocation, not across gradient-accumulation steps or distributed ranks.
 
+    softcap=None disables softcapping. A positive finite constant s applies
+    s*tanh(l/s) in FP32 to the raw BF16 logits l. CUDA and Triton both use
+    tanh.approx.f32. The chain-rule factor (1-tanh(l/s)**2) is applied before
+    BF16 rounding and dual MXFP8 gradient quantization. No extra buffer is used.
+
     Warm up once for each shape before CUDA Graph capture. This object owns
     mutable scratch buffers and must not be called concurrently on two streams.
     Only first-order differentiation is supported, as in the existing linear.
     """
     def __init__(self, *, chunk_size=1024, forward_config=8, dx_config=12,
-                 dw_config=12, raster_group=13, ignore_index=-100, balance=None):
+                 dw_config=12, raster_group=13, ignore_index=-100, balance=None,
+                 softcap=None):
         super().__init__()
+        self.softcap = _validate_softcap(softcap)
         if balance not in (None, "token", "document"):
             raise ValueError("balance must be None, 'token', or 'document'")
         self.balance = balance
@@ -160,7 +169,7 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
             self._quant, self._gemm = SiluBwdQuantizeLibrary(), LSELibrary()
             self._dgrad, self._wgrad = DgradLibrary(), WgradLibrary()
         key = (x.device, tuple(x.shape), tuple(w.shape), self.forward_config,
-               self.dx_config, self.dw_config, self.raster_group)
+               self.dx_config, self.dw_config, self.raster_group, self.softcap)
         if key not in self._states:
             self._states[key] = _ChunkState(x, w, ws, self)
         return self._states[key]
@@ -200,9 +209,10 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
 def fused_linear_cross_entropy_loss(x, target, weight, *, chunk_size=1024,
                                     forward_config=8, dx_config=12, dw_config=12,
                                     raster_group=13, quantized_weight=None, ignore_index=-100,
-                                    balance=None, cu_seqlens=None):
-    """One-shot scalar CE with optional balance; use the module to reuse plans."""
+                                    balance=None, cu_seqlens=None, softcap=None):
+    """One-shot scalar CE with balance/softcap; use the module to reuse plans."""
     return MXFP8FusedLinearCrossEntropy(
         chunk_size=chunk_size, forward_config=forward_config, dx_config=dx_config,
         dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index, balance=balance,
+        softcap=softcap,
     )(x, target, weight, quantized_weight=quantized_weight, cu_seqlens=cu_seqlens)

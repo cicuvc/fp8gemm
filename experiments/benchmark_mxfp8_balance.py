@@ -1,4 +1,4 @@
-"""Measure full MXFP8 CE forward/backward overhead of token/document balance.
+"""Measure full MXFP8 CE forward/backward overhead of balance and softcap.
 
 All modes use the same packed inputs, ignore mask, and cached quantized weight.
 The sum baseline is unnormalized. Optimizer and weight refresh are excluded.
@@ -23,11 +23,13 @@ def main():
     parser.add_argument("--documents", type=int, default=16)
     parser.add_argument("--chunk-size", type=int, default=1024)
     parser.add_argument("--repeats", type=int, default=15)
+    parser.add_argument("--iterations", type=int, default=1, help="Steps per timing sample; use >1 to reduce timing noise")
+    parser.add_argument("--softcap", type=float, help="Also measure softcap against each matching balance mode")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (args.documents <= 0 or args.documents % 4 or args.tokens <= 0 or
-            args.tokens % (4 * args.documents) or args.repeats <= 0):
-        parser.error("documents must be a positive multiple of 4; tokens a positive multiple of 4*documents; repeats positive")
+            args.tokens % (4 * args.documents) or args.repeats <= 0 or args.iterations <= 0):
+        parser.error("documents must be a positive multiple of 4; tokens a positive multiple of 4*documents; repeats/iterations positive")
     torch.manual_seed(911)
     x = torch.randn(args.tokens, args.hidden, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     w = (torch.randn(args.vocab, args.hidden, device="cuda", dtype=torch.bfloat16) * .02).requires_grad_()
@@ -41,9 +43,15 @@ def main():
     y[::7] = -100
     y[:lengths[0]] = -100
     names = ("sum", "token", "document")
+    if args.softcap is not None:
+        names += tuple(name + "_softcap" for name in names)
     steps, graphs, outputs = {}, {}, {}
     for name in names:
-        criterion = MXFP8FusedLinearCrossEntropy(chunk_size=args.chunk_size, balance=None if name == "sum" else name)
+        mode = name.removesuffix("_softcap")
+        criterion = MXFP8FusedLinearCrossEntropy(
+            chunk_size=args.chunk_size, balance=None if mode == "sum" else mode,
+            softcap=args.softcap if name.endswith("_softcap") else None,
+        )
         def step(criterion=criterion):
             loss = criterion(x, y, w, cu_seqlens=cu, quantized_weight=(wq, ws))
             return loss, *torch.autograd.grad(loss, (x, w))
@@ -64,7 +72,7 @@ def main():
         "config": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "document_lengths": lengths,
         "valid_tokens": int((y != -100).sum()),
-        "method": "CUDA events; full forward plus autograd.grad; same inputs with 1/7 ignored and first document fully ignored. Cached quantized W, excluding optimizer/refresh. Rotate mode order each round. Graph numbers include loss metadata and gradient normalization.",
+        "method": "CUDA events; full forward plus autograd.grad; same inputs with 1/7 ignored and first document fully ignored. Cached quantized W, excluding optimizer/refresh. Rotate mode order each round. Each sample averages config.iterations steps. Graph numbers include loss metadata and gradient normalization.",
     }
     for kind, functions in (("eager", steps), ("graph", {k: g.replay for k, g in graphs.items()})):
         samples = {name: [] for name in names}
@@ -73,13 +81,16 @@ def main():
                 name = names[(i + iteration) % len(names)]
                 start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
                 start.record()
-                values = functions[name]()
+                for _ in range(args.iterations):
+                    values = functions[name]()
+                    del values
                 end.record(); end.synchronize()
-                samples[name].append(start.elapsed_time(end))
-                del values
+                samples[name].append(start.elapsed_time(end) / args.iterations)
         result[kind] = {name: {"median_ms": statistics.median(times), "samples_ms": times} for name, times in samples.items()}
-        baseline = result[kind]["sum"]["median_ms"]
         for name in names:
+            baseline_name = name.removesuffix("_softcap") if name.endswith("_softcap") else "sum"
+            baseline = result[kind][baseline_name]["median_ms"]
+            result[kind][name]["baseline"] = baseline_name
             result[kind][name]["overhead_percent"] = (result[kind][name]["median_ms"] / baseline - 1) * 100
     # Graph replay must reproduce eager results with the same normalization.
     for name in names:
