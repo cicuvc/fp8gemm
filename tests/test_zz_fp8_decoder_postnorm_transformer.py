@@ -6,7 +6,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from experiments.fp8_decoder_postnorm_transformer import (
+pytest.importorskip("flash_attn", reason="SM120 decoder requires flash-attn")
+
+from experiments.fp8_decoder_postnorm_transformer import (  # noqa: E402
     FP8PostNormDecoderTransformer,
 )
 from fp8_adamw import FusedAdamWMXFP8

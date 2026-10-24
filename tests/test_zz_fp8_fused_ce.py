@@ -8,7 +8,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from experiments.fp8_decoder_transformer import FP8DecoderTransformer
+pytest.importorskip("flash_attn", reason="SM120 decoder requires flash-attn")
+
+from experiments.fp8_decoder_transformer import FP8DecoderTransformer  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

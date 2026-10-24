@@ -1,11 +1,16 @@
 """Tests for Muon with reduced-precision momentum state."""
 
+import pytest
 import torch
 
 from fp8_adamw import optimizer_state_nbytes
 from fp8_muon import MuonStateDtype, muon_state_dtypes
 
 
+@pytest.mark.skipif(
+    not hasattr(torch.optim, "Muon"),
+    reason="torch.optim.Muon is unavailable in this PyTorch build",
+)
 def test_fp32_muon_state_dtype_matches_torch_muon():
     torch.manual_seed(30)
     initial = torch.randn(32, 64)

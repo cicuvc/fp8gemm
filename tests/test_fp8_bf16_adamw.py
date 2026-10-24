@@ -77,6 +77,10 @@ def test_bf16_state_uses_half_the_memory():
     assert bf16_bytes * 2 == fp32_bytes
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA required for BF16 parameter updates",
+)
 def test_bf16_moments_support_bf16_parameters():
     torch.manual_seed(21)
     parameter = torch.nn.Parameter(

@@ -4,8 +4,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from experiments.fp8_decoder_transformer import FP8DecoderTransformer, RotaryEmbedding
-from fp8_adamw import FusedAdamWMXFP8
+flash_attn = pytest.importorskip("flash_attn", reason="SM120 decoder requires flash-attn")
+
+from experiments.fp8_decoder_transformer import (  # noqa: E402
+    FP8DecoderTransformer,
+    RotaryEmbedding,
+)
+from fp8_adamw import FusedAdamWMXFP8  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

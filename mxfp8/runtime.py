@@ -1,0 +1,272 @@
+"""Runtime checks and extension build management for the public MXFP8 API."""
+
+from __future__ import annotations
+
+import os
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+import torch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class ExtensionSpec:
+    name: str
+    builder: Callable[[], None]
+    binaries: tuple[Path, ...]
+    sources: tuple[Path, ...]
+
+
+_BUILD_LOCK = threading.RLock()
+
+
+def _path(*parts: str) -> Path:
+    return ROOT.joinpath(*parts)
+
+
+def _extension_spec(name: str) -> ExtensionSpec:
+    if name == "quantize":
+        from experiments import tk_weight_quantize
+
+        return ExtensionSpec(
+            name,
+            tk_weight_quantize.build,
+            (tk_weight_quantize.DEFAULT_OUTPUT / "libquant.so",),
+            (
+                _path("cuda/persistent_weight_quantize.cu"),
+                _path("cuda/mxfp8_quantize.cuh"),
+                _path("cuda/linear_tma_buffer.cuh"),
+                _path("cuda/tma_ring_pipe.cuh"),
+            ),
+        )
+    if name == "silu":
+        from experiments import tk_silu_bwd
+
+        return ExtensionSpec(
+            name,
+            tk_silu_bwd.build,
+            (
+                tk_silu_bwd.OUTPUT / "libsilu_bwd.so",
+                tk_silu_bwd.OUTPUT / "libsilu_bwd_quantize.so",
+            ),
+            (
+                _path("cuda/silu_bwd_elementwise.cu"),
+                _path("cuda/silu_bwd_quantize.cu"),
+                _path("cuda/silu_bwd_common.cuh"),
+                _path("cuda/mxfp8_quantize.cuh"),
+            ),
+        )
+    if name == "gemm":
+        from experiments import tk_mxfp8_gemm
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_gemm.build,
+            (tk_mxfp8_gemm.OUTPUT / "libgemm.so",),
+            (
+                _path("cuda/persistent_mxfp8_gemm.cu"),
+                _path("cuda/mxfp8_configs.inc"),
+                _path("cuda/mxfp8_epilogue.cuh"),
+                _path("cuda/mxfp8_lse.cuh"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    if name == "dgrad":
+        from experiments import tk_mxfp8_dgrad
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_dgrad.build,
+            (tk_mxfp8_dgrad.OUTPUT / "libdgrad.so",),
+            (
+                _path("cuda/persistent_mxfp8_dgrad.cu"),
+                _path("cuda/mxfp8_dgrad_configs.inc"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    if name == "wgrad":
+        from experiments import tk_mxfp8_wgrad
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_wgrad.build,
+            (tk_mxfp8_wgrad.OUTPUT / "libwgrad.so",),
+            (
+                _path("cuda/persistent_mxfp8_wgrad.cu"),
+                _path("cuda/mxfp8_wgrad_configs.inc"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    if name == "swiglu":
+        from experiments import tk_mxfp8_swiglu
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_swiglu.build,
+            (tk_mxfp8_swiglu.OUTPUT / "libswiglu.so",),
+            (
+                _path("cuda/persistent_mxfp8_swiglu.cu"),
+                _path("cuda/mxfp8_swiglu_configs.inc"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    if name == "swiglu_dgrad":
+        from experiments import tk_mxfp8_swiglu_dgrad
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_swiglu_dgrad.build,
+            (tk_mxfp8_swiglu_dgrad.OUTPUT / "libswd.so",),
+            (
+                _path("cuda/persistent_mxfp8_swiglu_dgrad.cu"),
+                _path("cuda/mxfp8_swiglu_dgrad_configs.inc"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    if name == "lse":
+        from experiments import tk_mxfp8_lse
+
+        return ExtensionSpec(
+            name,
+            tk_mxfp8_lse.build,
+            (tk_mxfp8_lse.OUTPUT / "liblse.so",),
+            (
+                _path("cuda/persistent_mxfp8_lse.cu"),
+                _path("cuda/persistent_mxfp8_gemm.cu"),
+                _path("cuda/mxfp8_configs.inc"),
+                _path("cuda/mxfp8_lse_configs.inc"),
+                _path("cuda/mxfp8_epilogue.cuh"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                _path("cuda/fp8_shared_load.cuh"),
+            ),
+        )
+    raise ValueError(f"unknown MXFP8 extension group: {name!r}")
+
+
+_GROUPS = {
+    "linear": ("quantize", "silu", "gemm", "dgrad", "wgrad"),
+    "mlp": (
+        "quantize",
+        "silu",
+        "gemm",
+        "dgrad",
+        "wgrad",
+        "swiglu",
+        "swiglu_dgrad",
+    ),
+    "loss": ("quantize", "silu", "gemm", "lse", "dgrad", "wgrad"),
+}
+_EXTENSIONS = (
+    "quantize",
+    "silu",
+    "gemm",
+    "dgrad",
+    "wgrad",
+    "swiglu",
+    "swiglu_dgrad",
+    "lse",
+)
+_GROUPS["all"] = _EXTENSIONS
+
+
+def _expand(names: tuple[str, ...]) -> tuple[str, ...]:
+    expanded: list[str] = []
+    for name in names or ("all",):
+        if name in _GROUPS:
+            candidates = _GROUPS[name]
+        elif name in _EXTENSIONS:
+            candidates = (name,)
+        else:
+            valid = ", ".join(sorted((*_GROUPS, *_EXTENSIONS)))
+            raise ValueError(f"unknown MXFP8 extension group {name!r}; choose from {valid}")
+        for candidate in candidates:
+            if candidate not in expanded:
+                expanded.append(candidate)
+    return tuple(expanded)
+
+
+def _is_current(spec: ExtensionSpec) -> bool:
+    if not all(binary.is_file() for binary in spec.binaries):
+        return False
+    oldest_binary = min(binary.stat().st_mtime_ns for binary in spec.binaries)
+    return all(
+        not source.exists() or source.stat().st_mtime_ns <= oldest_binary
+        for source in spec.sources
+    )
+
+
+def extension_status() -> dict[str, bool]:
+    """Return whether each built extension exists and is newer than its sources."""
+    return {name: _is_current(_extension_spec(name)) for name in _EXTENSIONS}
+
+
+def build_extensions(*names: str, force: bool = False) -> None:
+    """Build one or more extension groups.
+
+    Valid groups are ``linear``, ``mlp``, ``loss``, and ``all``; individual
+    builds may also be named explicitly (for example ``gemm`` or ``lse``).
+    Build products stay under ``runs/`` and are reused until a source changes.
+    """
+    if type(force) is not bool:
+        raise TypeError("force must be a bool")
+    requested = _expand(names)
+    with _BUILD_LOCK:
+        for name in requested:
+            spec = _extension_spec(name)
+            if force or not _is_current(spec):
+                spec.builder()
+
+
+def ensure_extensions(*names: str) -> None:
+    """Build requested extensions if needed unless auto-build is disabled.
+
+    Set ``MXFP8_NO_AUTO_BUILD=1`` for deployments that build artifacts ahead
+    of time. Missing artifacts then produce an actionable error instead of
+    invoking NVCC from model construction.
+    """
+    requested = _expand(names)
+    with _BUILD_LOCK:
+        pending = tuple(
+            name for name in requested if not _is_current(_extension_spec(name))
+        )
+        if not pending:
+            return
+        if os.environ.get("MXFP8_NO_AUTO_BUILD", "").lower() in {"1", "true", "yes"}:
+            missing = ", ".join(pending)
+            raise RuntimeError(
+                f"MXFP8 extensions are not built ({missing}); "
+                "call mxfp8.build_extensions() in the target environment"
+            )
+        for name in pending:
+            _extension_spec(name).builder()
+
+
+def require_sm120(device: torch.device | str | int | None = None) -> torch.device:
+    """Validate that ``device`` is an SM120 GPU and return a torch device."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("the MXFP8 modules require an available CUDA device")
+    if device is None:
+        resolved = torch.device("cuda", torch.cuda.current_device())
+    else:
+        resolved = torch.device(device)
+        if resolved.type == "cuda" and resolved.index is None:
+            resolved = torch.device("cuda", torch.cuda.current_device())
+    if resolved.type != "cuda":
+        raise ValueError(f"MXFP8 modules require a CUDA device, got {resolved}")
+    capability = torch.cuda.get_device_capability(resolved)
+    if capability != (12, 0):
+        raise RuntimeError(
+            "MXFP8 modules require SM120 (compute capability 12.0); "
+            f"{resolved} reports {capability[0]}.{capability[1]}"
+        )
+    return resolved
