@@ -1,8 +1,0 @@
-...............                                                          [100%]
-=============================== warnings summary ===============================
-tests/test_cached_fp8_wgrad.py: 10 warnings
-  /usr/local/lib/python3.12/site-packages/triton/language/core.py:2284: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
-    warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-15 passed, 10 warnings in 79.24s (0:01:19)

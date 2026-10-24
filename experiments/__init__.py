@@ -1,1 +1,1 @@
-"""Experimental training paths that are not part of the stable API."""
+"""Internal kernel adapters used by the public :mod:`mxfp8` package."""

@@ -39,5 +39,6 @@ y = linear(x)
 `mxfp8.bind_optimizer(model, optimizer)` 刷新所有嵌套的 FP8 权重缓存；
 `FusedAdamWMXFP8` 会直接更新缓存并保持 CUDA Graph 使用的缓冲区地址稳定。
 
-底层实验和完整 decoder 仍位于 `experiments/`。公开 API 保持当前无 bias
-语义，不尝试兼容 `torch.nn.Linear` 的参数布局或可选 bias。
+`experiments/` 现仅包含公开 package 所需的 kernel 适配层和 PyTorch
+autograd 组合。公开 API 保持无 bias 语义，不兼容 `torch.nn.Linear`
+的参数布局或可选 bias。
