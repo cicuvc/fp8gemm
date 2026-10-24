@@ -12,15 +12,15 @@ def compiled_mxfp8_kernels():
     ):
         return
 
-    from experiments import (
-        tk_mxfp8_dgrad,
-        tk_mxfp8_gemm,
-        tk_mxfp8_lse,
-        tk_mxfp8_swiglu,
-        tk_mxfp8_swiglu_dgrad,
-        tk_mxfp8_wgrad,
-        tk_silu_bwd,
-        tk_weight_quantize,
+    from mxfp8._kernels import (
+        dgrad as tk_mxfp8_dgrad,
+        gemm as tk_mxfp8_gemm,
+        lse as tk_mxfp8_lse,
+        silu as tk_silu_bwd,
+        swiglu as tk_mxfp8_swiglu,
+        swiglu_dgrad as tk_mxfp8_swiglu_dgrad,
+        weight_quantize as tk_weight_quantize,
+        wgrad as tk_mxfp8_wgrad,
     )
 
     build_specs = [

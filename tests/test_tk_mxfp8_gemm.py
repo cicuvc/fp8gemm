@@ -1,9 +1,9 @@
 """Prequantized GEMM scale prefetch, TMA tails, persistent reuse and graph safety."""
 import pytest
 import torch
-from experiments.mxfp8_core import quantize_weight
-from experiments.tk_mxfp8_gemm import Library, build, OUTPUT, ROOT, pack_a_scales, CONFIGS
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._core import quantize_weight
+from mxfp8._kernels.gemm import Library, build, OUTPUT, ROOT, pack_a_scales, CONFIGS
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),reason='SM120 required')
 @pytest.fixture(scope='module',autouse=True)

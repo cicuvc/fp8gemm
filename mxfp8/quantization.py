@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import torch
 
-from experiments.mxfp8_core import quantize_weight as _quantize_weight
-from experiments.tk_mxfp8_gemm import pack_a_scales
-
+from ._core import quantize_weight as _quantize_weight
+from ._kernels.gemm import pack_a_scales
 from .runtime import ensure_extensions
 
 

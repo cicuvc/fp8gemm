@@ -5,6 +5,7 @@ use the usual 32x32 block-scale layout. The fused result is BF16 [M,N].
 Optionally, the pre-activation half-gate ``0.5*gate(x)`` and raw up linear
 output are also written as BF16 through asynchronous TMA stores for backward.
 """
+
 import ctypes as ct
 from pathlib import Path
 import re
@@ -12,7 +13,7 @@ import subprocess
 
 import torch
 
-from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
+from .._core import ROOT, FLAGS, nvcc_path
 
 OUTPUT = ROOT / "runs/tk_mxfp8_swiglu"
 CONFIGS = [
@@ -56,9 +57,9 @@ class MXFP8SwiGLULibrary:
         self.lib.tk_mx_swiglu_create.argtypes = [ct.c_void_p] * 7 + [ct.c_int] * 6
         self.lib.tk_mx_swiglu_create.restype = ct.c_void_p
         if hasattr(self.lib, "tk_mx_swiglu_create_aux"):
-            self.lib.tk_mx_swiglu_create_aux.argtypes = (
-                [ct.c_void_p] * 9 + [ct.c_int] * 6
-            )
+            self.lib.tk_mx_swiglu_create_aux.argtypes = [ct.c_void_p] * 9 + [
+                ct.c_int
+            ] * 6
             self.lib.tk_mx_swiglu_create_aux.restype = ct.c_void_p
         self.lib.tk_mx_swiglu_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         self.lib.tk_mx_swiglu_launch.restype = ct.c_int
@@ -128,12 +129,18 @@ class MXFP8SwiGLUPlan:
         n = gate.shape[0]
         if min(m, n, k) <= 0 or gate.shape[1] != k or k % 32:
             raise ValueError("Invalid matrix dimensions")
-        if x.dtype != torch.float8_e4m3fn or gate.dtype != x.dtype or up.dtype != x.dtype:
+        if (
+            x.dtype != torch.float8_e4m3fn
+            or gate.dtype != x.dtype
+            or up.dtype != x.dtype
+        ):
             raise ValueError("Expected E4M3 x, gate, and up")
         expected_a_scale = ((k + 127) // 128, (m + 15) // 16 * 16)
         expected_b_scale = ((n + 31) // 32, k // 32)
         if x_scale.dtype != torch.int32 or x_scale.shape != expected_a_scale:
-            raise ValueError("Expected packed int32 X scales [ceil(K/128),roundup(M,16)]")
+            raise ValueError(
+                "Expected packed int32 X scales [ceil(K/128),roundup(M,16)]"
+            )
         if gate_scale.dtype != torch.uint8 or gate_scale.shape != expected_b_scale:
             raise ValueError("Invalid gate scale shape or dtype")
         if up_scale.dtype != torch.uint8 or up_scale.shape != expected_b_scale:
@@ -218,10 +225,12 @@ class MXFP8SwiGLUPlan:
             raise RuntimeError(owner.lib.tk_mx_swiglu_error().decode())
         info = (ct.c_int * 10)()
         owner.lib.tk_mx_swiglu_info(self.handle, info)
-        self.info = dict(zip(
-            ["R", "C", "BK", "stages", "shared_bytes", "initial_regs", "grid"],
-            info[:7],
-        ))
+        self.info = dict(
+            zip(
+                ["R", "C", "BK", "stages", "shared_bytes", "initial_regs", "grid"],
+                info[:7],
+            )
+        )
         self.info["raster_group"] = info[7]
         self.info["store_aux"] = bool(info[8])
         self.info["aux_buffers"] = info[9]
@@ -257,7 +266,11 @@ class MXFP8SwiGLUPlan:
     ):
         if gate.shape != up.shape or gate.shape[1] != x.shape[1]:
             raise ValueError("Expected X[M,K] and equal gate/up [N,K]")
-        if x.dtype != torch.float8_e4m3fn or gate.dtype != x.dtype or up.dtype != x.dtype:
+        if (
+            x.dtype != torch.float8_e4m3fn
+            or gate.dtype != x.dtype
+            or up.dtype != x.dtype
+        ):
             raise ValueError("Expected E4M3 x, gate, and up")
         if x_scale.shape != self.x_scale_shape or x_scale.dtype != torch.int32:
             raise ValueError("Invalid packed X scales")

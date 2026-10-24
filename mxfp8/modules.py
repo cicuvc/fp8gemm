@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import torch
 
-from experiments.tk_mxfp8_down import (
-    MXFP8DownProjection as _ExperimentDownProjection,
+from ._impl.down import (
+    MXFP8DownProjection as _BaseDownProjection,
 )
-from experiments.tk_mxfp8_linear import MXFP8Linear as _ExperimentLinear
-from experiments.tk_mxfp8_swiglu_layer import (
-    MXFP8SwiGLU as _ExperimentSwiGLU,
+from ._impl.linear import MXFP8Linear as _BaseLinear
+from ._impl.swiglu import (
+    MXFP8SwiGLU as _BaseSwiGLU,
 )
 
 from .runtime import ensure_extensions, require_sm120
 
 
-class MXFP8Linear(_ExperimentLinear):
+class MXFP8Linear(_BaseLinear):
     """Bias-free linear layer with pure-MXFP8 forward and backward GEMMs.
 
     Inputs must be contiguous BF16 ``[M, K]`` tensors. Weights are FP32
@@ -46,7 +46,7 @@ class MXFP8Linear(_ExperimentLinear):
         )
 
 
-class MXFP8DownProjection(_ExperimentDownProjection):
+class MXFP8DownProjection(_BaseDownProjection):
     """Bias-free down projection using MXFP8 forward, dX, and dW GEMMs."""
 
     def __init__(
@@ -73,7 +73,7 @@ class MXFP8DownProjection(_ExperimentDownProjection):
         )
 
 
-class MXFP8SwiGLU(_ExperimentSwiGLU):
+class MXFP8SwiGLU(_BaseSwiGLU):
     """Bias-free ``down(silu(gate(x)) * up(x))`` training module."""
 
     def __init__(

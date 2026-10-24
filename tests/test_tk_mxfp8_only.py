@@ -2,9 +2,9 @@
 import os
 import pytest
 import torch
-from experiments.mxfp8_core import quantize_weight
-from experiments.tk_mxfp8_gemm import Library, build, OUTPUT, ROOT, CONFIGS, pack_a_scales
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._core import quantize_weight
+from mxfp8._kernels.gemm import Library, build, OUTPUT, ROOT, CONFIGS, pack_a_scales
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_gemm import exact_operands
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),

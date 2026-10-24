@@ -38,10 +38,7 @@ def _adamw_kernel(
 
     step_size = lr / bias_correction1
     denominator = tl.sqrt(v_rounded / bias_correction2) + eps
-    updated = (
-        p * (1.0 - lr * weight_decay)
-        - step_size * m_rounded / denominator
-    )
+    updated = p * (1.0 - lr * weight_decay) - step_size * m_rounded / denominator
     if PARAMETER_FP32:
         tl.store(parameter + offsets, updated, mask=mask)
     else:
@@ -109,10 +106,7 @@ def _adamw_mxfp8_kernel(
 
     step_size = lr / bias_correction1
     denominator = tl.sqrt(v_rounded / bias_correction2) + eps
-    updated = (
-        p * (1.0 - lr * weight_decay)
-        - step_size * m_rounded / denominator
-    )
+    updated = p * (1.0 - lr * weight_decay) - step_size * m_rounded / denominator
     tl.store(parameter + offsets, updated, mask=mask)
     tl.store(
         exp_avg + rows[:, None] * exp_avg_stride + cols[None, :],
@@ -234,12 +228,8 @@ class FusedAdamWMXFP8(torch.optim.Optimizer):
         state = self.state[parameter]
         if not state:
             state["step"] = 0
-            state["exp_avg"] = torch.zeros_like(
-                parameter, dtype=torch.bfloat16
-            )
-            state["exp_avg_sq"] = torch.zeros_like(
-                parameter, dtype=torch.bfloat16
-            )
+            state["exp_avg"] = torch.zeros_like(parameter, dtype=torch.bfloat16)
+            state["exp_avg_sq"] = torch.zeros_like(parameter, dtype=torch.bfloat16)
         if (
             state["exp_avg"].dtype != torch.bfloat16
             or state["exp_avg_sq"].dtype != torch.bfloat16
@@ -289,9 +279,7 @@ class FusedAdamWMXFP8(torch.optim.Optimizer):
                         )
                     weight_fp8, weight_scale = binding
                     n, k = parameter.shape
-                    _adamw_mxfp8_kernel[
-                        (triton.cdiv(n, 32), triton.cdiv(k, 32))
-                    ](
+                    _adamw_mxfp8_kernel[(triton.cdiv(n, 32), triton.cdiv(k, 32))](
                         parameter,
                         parameter.grad,
                         state["exp_avg"],
@@ -318,9 +306,7 @@ class FusedAdamWMXFP8(torch.optim.Optimizer):
                     )
                 else:
                     block = 256
-                    _adamw_kernel[
-                        (triton.cdiv(parameter.numel(), block),)
-                    ](
+                    _adamw_kernel[(triton.cdiv(parameter.numel(), block),)](
                         parameter,
                         parameter.grad,
                         state["exp_avg"],
@@ -432,10 +418,7 @@ class AdamWStateDtype(torch.optim.Optimizer):
                 bias_correction2 = 1.0 - beta2**step
                 step_size = lr / bias_correction1
                 denominator = (
-                    state["exp_avg_sq"].float()
-                    .div(bias_correction2)
-                    .sqrt()
-                    .add_(eps)
+                    state["exp_avg_sq"].float().div(bias_correction2).sqrt().add_(eps)
                 )
 
                 if parameter.dtype == torch.float32:

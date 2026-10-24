@@ -1,9 +1,9 @@
 """MXFP8 AB dW: per-feature scales, TMA tails, persistent reuse and preparation."""
 import pytest
 import torch
-from experiments.tk_mxfp8_wgrad import Library,build,OUTPUT,ROOT,CONFIGS
-from experiments.tk_mxfp8_gemm import pack_a_scales
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._kernels.wgrad import Library,build,OUTPUT,ROOT,CONFIGS
+from mxfp8._kernels.gemm import pack_a_scales
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
                             reason='SM120 required')

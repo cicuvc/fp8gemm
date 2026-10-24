@@ -1,4 +1,4 @@
-"""Experimental chunked MXFP8 LM head + cross entropy on SM120.
+"""Chunked MXFP8 LM head and cross entropy on SM120.
 
 By default returns a scalar SUM of non-ignored token losses. balance="token"
 averages valid tokens; balance="document" averages the per-document valid-token
@@ -16,28 +16,38 @@ Example::
 Weights may be FP32 masters or BF16 (including a tied embedding parameter).
 Optional quantized_weight=(E4M3, E8M0) avoids requantizing W; the caller must keep
 that cache synchronized. Quantization uses the existing linear's STE convention.
-Build CUDA dependencies as for MXFP8Linear, plus python -m experiments.tk_mxfp8_lse.
+Build CUDA dependencies with :func:`mxfp8.build_extensions`.
 """
 
 import torch
 from torch import nn
 from torch.autograd.function import once_differentiable
 
-from experiments.mxfp8_core import quantize_weight
-from experiments.mxfp8_ce import CEPlan, merge_lse, _validate_target, _validate_ignore_index, _validate_softcap
-from experiments.mxfp8_balance import document_weights, reduce_balanced_loss, validate_cu_seqlens
-from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
-from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
-from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from .._core import quantize_weight
+from .._kernels.dgrad import Library as DgradLibrary
+from .._kernels.lse import CONFIGS, Library as LSELibrary
+from .._kernels.silu import SiluBwdQuantizeLibrary
+from .._kernels.wgrad import Library as WgradLibrary
+from .balance import document_weights, reduce_balanced_loss, validate_cu_seqlens
+from .ce import (
+    CEPlan,
+    _validate_ignore_index,
+    _validate_softcap,
+    _validate_target,
+    merge_lse,
+)
 
 
 class _ChunkState:
     def __init__(self, x, w, ws, module, need_grad):
         self.xq = module._quant.plan_direct(x)
         self.gemm = module._gemm.plan(
-            self.xq.row_fp8, w, self.xq.row_scale, ws,
-            config=module.forward_config, raster_group=module.raster_group,
+            self.xq.row_fp8,
+            w,
+            self.xq.row_scale,
+            ws,
+            config=module.forward_config,
+            raster_group=module.raster_group,
             softcap=module.softcap,
         )
         m = x.shape[0]
@@ -48,13 +58,20 @@ class _ChunkState:
             return
         self.ce = CEPlan(m, v, x.device)
         self.dx = module._dgrad.plan(
-            self.ce.row_fp8, w, self.ce.row_scale, ws,
-            config=module.dx_config, raster_group=module.raster_group,
+            self.ce.row_fp8,
+            w,
+            self.ce.row_scale,
+            ws,
+            config=module.dx_config,
+            raster_group=module.raster_group,
         )
         self.dw = module._wgrad.plan(
-            self.ce.column_fp8, self.xq.column_fp8,
-            self.ce.column_scale, self.xq.column_scale,
-            config=module.dw_config, raster_group=module.raster_group,
+            self.ce.column_fp8,
+            self.xq.column_fp8,
+            self.ce.column_scale,
+            self.xq.column_scale,
+            config=module.dw_config,
+            raster_group=module.raster_group,
         )
 
     def __call__(self, x, target, w, ws, ignore_index, loss, row_weight=None, nll=None):
@@ -65,12 +82,27 @@ class _ChunkState:
         try:
             self.xq()
             logits, partial = self.gemm()
-            merge_lse(logits, partial, target, lse=self.lse, loss=loss, nll=nll,
-                      ignore_index=ignore_index, row_weight=row_weight, softcap=self.gemm.softcap)
+            merge_lse(
+                logits,
+                partial,
+                target,
+                lse=self.lse,
+                loss=loss,
+                nll=nll,
+                ignore_index=ignore_index,
+                row_weight=row_weight,
+                softcap=self.gemm.softcap,
+            )
             if self.ce is None:
                 return None, None
-            self.ce(logits, self.lse, target, ignore_index=ignore_index, row_weight=row_weight,
-                    softcap=self.gemm.softcap)
+            self.ce(
+                logits,
+                self.lse,
+                target,
+                ignore_index=ignore_index,
+                row_weight=row_weight,
+                softcap=self.gemm.softcap,
+            )
             return self.dx(), self.dw()
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
@@ -93,7 +125,9 @@ def _forward(x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_gra
     with torch.cuda.device(x.device):
         if module.balance == "document":
             row_weight, doc_counts = document_weights(
-                target, cu_seqlens, ignore_index=module.ignore_index,
+                target,
+                cu_seqlens,
+                ignore_index=module.ignore_index,
             )
         for start in range(0, x.shape[0], module.chunk_size):
             end = min(start + module.chunk_size, x.shape[0])
@@ -101,8 +135,16 @@ def _forward(x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_gra
             state = module._state(c_x, wq, ws, need_grad=need_grad)
             c_weight = None if row_weight is None else row_weight[start:end]
             c_nll = nll[start:end] if separate_nll else None
-            c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index,
-                               losses[start:end], c_weight, c_nll)
+            c_dx, c_dw = state(
+                c_x,
+                target[start:end],
+                wq,
+                ws,
+                module.ignore_index,
+                losses[start:end],
+                c_weight,
+                c_nll,
+            )
             if need_grad:
                 dx[start:end].copy_(c_dx)
                 dw.add_(c_dw)
@@ -110,7 +152,10 @@ def _forward(x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_gra
             loss, inv = losses.sum(), None
         else:
             loss, inv = reduce_balanced_loss(
-                losses, target, balance=module.balance, doc_counts=doc_counts,
+                losses,
+                target,
+                balance=module.balance,
+                doc_counts=doc_counts,
                 ignore_index=module.ignore_index,
             )
     # Accumulate dW in FP32 and cast only after all chunks have contributed.
@@ -121,7 +166,15 @@ class _FusedCEFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, target, weight, wq, ws, module, cu_seqlens, return_nll):
         loss, nll, dx, dw, inv = _forward(
-            x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_grad=True,
+            x,
+            target,
+            weight,
+            wq,
+            ws,
+            module,
+            cu_seqlens,
+            return_nll,
+            need_grad=True,
         )
         ctx.save_for_backward(dx, dw, inv)
         if return_nll:
@@ -172,9 +225,19 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     mutable scratch buffers and must not be called concurrently on two streams.
     Only first-order differentiation is supported, as in the existing linear.
     """
-    def __init__(self, *, chunk_size=1024, forward_config=8, dx_config=12,
-                 dw_config=12, raster_group=13, ignore_index=-100, balance=None,
-                 softcap=None):
+
+    def __init__(
+        self,
+        *,
+        chunk_size=1024,
+        forward_config=8,
+        dx_config=12,
+        dw_config=12,
+        raster_group=13,
+        ignore_index=-100,
+        balance=None,
+        softcap=None,
+    ):
         super().__init__()
         self.softcap = _validate_softcap(softcap)
         if balance not in (None, "token", "document"):
@@ -187,7 +250,11 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         if type(forward_config) is not int or forward_config not in CONFIGS:
             raise ValueError("Unsupported forward LSE config")
         self.chunk_size = chunk_size
-        self.forward_config, self.dx_config, self.dw_config = forward_config, dx_config, dw_config
+        self.forward_config, self.dx_config, self.dw_config = (
+            forward_config,
+            dx_config,
+            dw_config,
+        )
         self.raster_group = raster_group
         self._states = {}
         self._quant = self._gemm = self._dgrad = self._wgrad = None
@@ -197,8 +264,17 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
             self._quant, self._gemm = SiluBwdQuantizeLibrary(), LSELibrary()
         if need_grad and self._dgrad is None:
             self._dgrad, self._wgrad = DgradLibrary(), WgradLibrary()
-        key = (x.device, tuple(x.shape), tuple(w.shape), self.forward_config,
-               self.dx_config, self.dw_config, self.raster_group, self.softcap, need_grad)
+        key = (
+            x.device,
+            tuple(x.shape),
+            tuple(w.shape),
+            self.forward_config,
+            self.dx_config,
+            self.dw_config,
+            self.raster_group,
+            self.softcap,
+            need_grad,
+        )
         if key not in self._states:
             self._states[key] = _ChunkState(x, w, ws, self, need_grad)
         return self._states[key]
@@ -207,16 +283,34 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         """Drop cached per-shape workspaces outside CUDA Graph capture/replay."""
         self._states.clear()
 
-    def forward(self, x, target, weight, *, quantized_weight=None, cu_seqlens=None,
-                return_nll=False):
+    def forward(
+        self,
+        x,
+        target,
+        weight,
+        *,
+        quantized_weight=None,
+        cu_seqlens=None,
+        return_nll=False,
+    ):
         if type(return_nll) is not bool:
             raise ValueError("return_nll must be a bool")
-        if (x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda or
-                not x.is_contiguous() or min(x.shape) <= 0):
+        if (
+            x.ndim != 2
+            or x.dtype != torch.bfloat16
+            or not x.is_cuda
+            or not x.is_contiguous()
+            or min(x.shape) <= 0
+        ):
             raise ValueError("Expected nonempty contiguous CUDA BF16 X[M,H]")
-        if (weight.ndim != 2 or weight.shape[1] != x.shape[1] or weight.shape[0] <= 0 or
-                weight.dtype not in (torch.bfloat16, torch.float32) or
-                weight.device != x.device or not weight.is_contiguous()):
+        if (
+            weight.ndim != 2
+            or weight.shape[1] != x.shape[1]
+            or weight.shape[0] <= 0
+            or weight.dtype not in (torch.bfloat16, torch.float32)
+            or weight.device != x.device
+            or not weight.is_contiguous()
+        ):
             raise ValueError("Expected contiguous FP32/BF16 W[V,H] on X's device")
         if weight.shape[0] % 64 or x.shape[1] % 64:
             raise ValueError("V and H must be multiples of 64")
@@ -230,27 +324,67 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
                 wq, ws = quantize_weight(weight.detach().float())
         else:
             wq, ws = quantized_weight
-            if (wq.shape != weight.shape or wq.dtype != torch.float8_e4m3fn or
-                    ws.shape != (weight.shape[0] // 32, weight.shape[1] // 32) or
-                    ws.dtype != torch.uint8 or wq.device != x.device or ws.device != x.device or
-                    not wq.is_contiguous() or not ws.is_contiguous()):
+            if (
+                wq.shape != weight.shape
+                or wq.dtype != torch.float8_e4m3fn
+                or ws.shape != (weight.shape[0] // 32, weight.shape[1] // 32)
+                or ws.dtype != torch.uint8
+                or wq.device != x.device
+                or ws.device != x.device
+                or not wq.is_contiguous()
+                or not ws.is_contiguous()
+            ):
                 raise ValueError("Invalid quantized weight cache")
         if not torch.is_grad_enabled() or not (x.requires_grad or weight.requires_grad):
             loss, nll, _, _, _ = _forward(
-                x, target, weight, wq, ws, self, cu_seqlens, return_nll, need_grad=False,
+                x,
+                target,
+                weight,
+                wq,
+                ws,
+                self,
+                cu_seqlens,
+                return_nll,
+                need_grad=False,
             )
             return (loss, nll) if return_nll else loss
-        return _FusedCEFunction.apply(x, target, weight, wq, ws, self, cu_seqlens, return_nll)
+        return _FusedCEFunction.apply(
+            x, target, weight, wq, ws, self, cu_seqlens, return_nll
+        )
 
 
-def fused_linear_cross_entropy_loss(x, target, weight, *, chunk_size=1024,
-                                    forward_config=8, dx_config=12, dw_config=12,
-                                    raster_group=13, quantized_weight=None, ignore_index=-100,
-                                    balance=None, cu_seqlens=None, softcap=None, return_nll=False):
+def fused_linear_cross_entropy_loss(
+    x,
+    target,
+    weight,
+    *,
+    chunk_size=1024,
+    forward_config=8,
+    dx_config=12,
+    dw_config=12,
+    raster_group=13,
+    quantized_weight=None,
+    ignore_index=-100,
+    balance=None,
+    cu_seqlens=None,
+    softcap=None,
+    return_nll=False,
+):
     """One-shot CE, optionally (loss, non-differentiable FP32 NLL[M])."""
     return MXFP8FusedLinearCrossEntropy(
-        chunk_size=chunk_size, forward_config=forward_config, dx_config=dx_config,
-        dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index, balance=balance,
+        chunk_size=chunk_size,
+        forward_config=forward_config,
+        dx_config=dx_config,
+        dw_config=dw_config,
+        raster_group=raster_group,
+        ignore_index=ignore_index,
+        balance=balance,
         softcap=softcap,
-    )(x, target, weight, quantized_weight=quantized_weight, cu_seqlens=cu_seqlens,
-      return_nll=return_nll)
+    )(
+        x,
+        target,
+        weight,
+        quantized_weight=quantized_weight,
+        cu_seqlens=cu_seqlens,
+        return_nll=return_nll,
+    )

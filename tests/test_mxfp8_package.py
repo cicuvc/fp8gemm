@@ -7,7 +7,7 @@ import torch
 
 import mxfp8
 from mxfp8 import MXFP8Linear, MXFP8RMSNorm
-from experiments.mxfp8_core import cuda_tool_path
+from mxfp8._core import cuda_tool_path
 from mxfp8.runtime import _GROUPS, _EXTENSIONS
 
 

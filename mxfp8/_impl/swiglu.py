@@ -5,11 +5,11 @@ import math
 import torch
 from torch import nn
 
-from experiments.mxfp8_core import bind_fp8_optimizer, quantize_weight
-from experiments.tk_mxfp8_down import MXFP8DownProjection
-from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
-from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from .._core import bind_fp8_optimizer, quantize_weight
+from .._kernels.silu import SiluBwdQuantizeLibrary
+from .._kernels.swiglu import MXFP8SwiGLULibrary
+from .down import MXFP8DownProjection
+from .swiglu_backward import MXFP8SwiGLUBackward
 
 
 class _ForwardState:
@@ -170,10 +170,14 @@ class MXFP8SwiGLU(nn.Module):
         self.down_dw_config = down_dw_config
         self.raster_group = raster_group
         self.gate_weight = nn.Parameter(
-            torch.empty((hidden_features, in_features), dtype=torch.float32, device=device)
+            torch.empty(
+                (hidden_features, in_features), dtype=torch.float32, device=device
+            )
         )
         self.up_weight = nn.Parameter(
-            torch.empty((hidden_features, in_features), dtype=torch.float32, device=device)
+            torch.empty(
+                (hidden_features, in_features), dtype=torch.float32, device=device
+            )
         )
         if bias:
             raise ValueError("MXFP8SwiGLU down projection does not support bias")
@@ -223,11 +227,11 @@ class MXFP8SwiGLU(nn.Module):
         if not self.gate_weight.is_cuda:
             raise RuntimeError("MXFP8SwiGLU requires a CUDA device")
         with torch.no_grad():
-            self._gate_weight_fp8, self._gate_weight_scale = (
-                quantize_weight(self.gate_weight.detach())
+            self._gate_weight_fp8, self._gate_weight_scale = quantize_weight(
+                self.gate_weight.detach()
             )
-            self._up_weight_fp8, self._up_weight_scale = (
-                quantize_weight(self.up_weight.detach())
+            self._up_weight_fp8, self._up_weight_scale = quantize_weight(
+                self.up_weight.detach()
             )
             self.down_proj.refresh_fp8_weight()
         self._synced_versions = (

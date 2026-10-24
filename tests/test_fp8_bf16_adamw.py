@@ -3,13 +3,13 @@
 import pytest
 import torch
 
-from fp8_adamw import (
+from mxfp8.adamw import (
     AdamWStateDtype,
     FusedAdamWMXFP8,
     optimizer_state_dtypes,
     optimizer_state_nbytes,
 )
-from experiments.mxfp8_core import quantize_weight
+from mxfp8._core import quantize_weight
 
 
 def test_bf16_moments_track_fp32_moments():

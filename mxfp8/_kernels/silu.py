@@ -1,19 +1,18 @@
 """Torch adapter for the all-BF16 elementwise SwiGLU backward kernel."""
 
 import ctypes as ct
-from pathlib import Path
 import subprocess
 
 import torch
 
-from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
+from .._core import ROOT, FLAGS, nvcc_path
 
 OUTPUT = ROOT / "runs/tk_silu_bwd"
 
 
 def build():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    for source,library in [
+    for source, library in [
         ("cuda/silu_bwd_elementwise.cu", "libsilu_bwd.so"),
         ("cuda/silu_bwd_quantize.cu", "libsilu_bwd_quantize.so"),
     ]:
@@ -58,7 +57,11 @@ class SiluBwdPlan:
     def __init__(self, owner, dy, half_gate, up, dgate, dup):
         if dy.shape != half_gate.shape or dy.shape != up.shape:
             raise ValueError("dy, half_gate, and up must have equal shapes")
-        if dy.dtype != torch.bfloat16 or half_gate.dtype != dy.dtype or up.dtype != dy.dtype:
+        if (
+            dy.dtype != torch.bfloat16
+            or half_gate.dtype != dy.dtype
+            or up.dtype != dy.dtype
+        ):
             raise ValueError("Expected BF16 inputs")
         if dgate is None:
             dgate = torch.empty_like(dy)
@@ -183,7 +186,9 @@ class SiluBwdQuantizePlan:
         )
         self.up_row = torch.empty_like(self.gate_row)
         self.up_row_scale = torch.zeros_like(self.gate_row_scale)
-        self.gate_col = torch.empty((n, mp), device=dy.device, dtype=torch.float8_e4m3fn)
+        self.gate_col = torch.empty(
+            (n, mp), device=dy.device, dtype=torch.float8_e4m3fn
+        )
         self.gate_col_scale = torch.zeros(
             col_scale_shape, device=dy.device, dtype=torch.int32
         )
@@ -261,7 +266,6 @@ class SiluBwdQuantizePlan:
 
     def reallocate_outputs(self):
         mp = (self.m + 127) // 128 * 128
-        mp16 = (self.m + 15) // 16 * 16
         n = self.n
         self.gate_row = torch.empty(
             (self.m, self.n), device=self.device, dtype=torch.float8_e4m3fn

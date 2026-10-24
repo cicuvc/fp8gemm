@@ -1,27 +1,27 @@
-"""Pure-MXFP8 down projection assembled from existing kernels."""
+"""Bias-free linear layer built from the pure-MXFP8 CUDA kernels."""
 
 import math
 
 import torch
 from torch import nn
 
-from experiments.mxfp8_core import quantize_weight
-from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
-from experiments.tk_mxfp8_gemm import Library as GemmLibrary
-from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from .._core import bind_fp8_optimizer, quantize_weight
+from .._kernels.dgrad import Library as DgradLibrary
+from .._kernels.gemm import Library as GemmLibrary
+from .._kernels.silu import SiluBwdQuantizeLibrary
+from .._kernels.wgrad import Library as WgradLibrary
 
 
 class _ForwardState:
     def __init__(
         self,
-        hidden,
+        x,
         weight_fp8,
         weight_scale,
         forward_config,
         raster_group,
     ):
-        self.quantize = SiluBwdQuantizeLibrary().plan_direct(hidden)
+        self.quantize = SiluBwdQuantizeLibrary().plan_direct(x)
         self.gemm = GemmLibrary().plan(
             self.quantize.row_fp8,
             weight_fp8,
@@ -31,8 +31,8 @@ class _ForwardState:
             raster_group=raster_group,
         )
 
-    def __call__(self, hidden, weight_fp8, weight_scale):
-        self.quantize.rebind(hidden)
+    def __call__(self, x, weight_fp8, weight_scale):
+        self.quantize.rebind(x)
         self.gemm.rebind(
             self.quantize.row_fp8,
             weight_fp8,
@@ -47,20 +47,15 @@ class _BackwardState:
     def __init__(
         self,
         dy,
-        hidden,
-        hidden_row,
-        hidden_row_scale,
-        hidden_column,
-        hidden_column_scale,
+        x_column,
+        x_column_scale,
         weight_fp8,
         weight_scale,
         dx_config,
         dw_config,
         raster_group,
     ):
-        self.dy_quantize = SiluBwdQuantizeLibrary().plan_direct(
-            dy, transpose=True
-        )
+        self.dy_quantize = SiluBwdQuantizeLibrary().plan_direct(dy, transpose=True)
         self.dx = DgradLibrary().plan(
             self.dy_quantize.row_fp8,
             weight_fp8,
@@ -71,24 +66,21 @@ class _BackwardState:
         )
         self.dw = WgradLibrary().plan(
             self.dy_quantize.column_fp8,
-            hidden_column,
+            x_column,
             self.dy_quantize.column_scale,
-            hidden_column_scale,
+            x_column_scale,
             config=dw_config,
             raster_group=raster_group,
         )
-        self.hidden = hidden
-        self.hidden_row = hidden_row
-        self.hidden_row_scale = hidden_row_scale
         self.device = dy.device
-        self.dx_shape = (dy.shape[0], hidden_column.shape[1])
-        self.dw_shape = (weight_fp8.shape[0], hidden_column.shape[1])
+        self.dx_shape = (dy.shape[0], x_column.shape[1])
+        self.dw_shape = (weight_fp8.shape[0], x_column.shape[1])
 
     def __call__(
         self,
         dy,
-        hidden_column,
-        hidden_column_scale,
+        x_column,
+        x_column_scale,
         weight_fp8,
         weight_scale,
     ):
@@ -103,34 +95,31 @@ class _BackwardState:
         )
         self.dw.rebind(
             self.dy_quantize.column_fp8,
-            hidden_column,
+            x_column,
             self.dy_quantize.column_scale,
-            hidden_column_scale,
+            x_column_scale,
             out=torch.empty(self.dw_shape, device=self.device, dtype=torch.bfloat16),
         )
         self.dy_quantize()
-        dx = self.dx()
-        dw = self.dw()
+        dx, dw = self.dx(), self.dw()
         self.dy_quantize.release()
         self.dx.release()
         self.dw.release()
         return dx, dw
 
 
-class _DownFunction(torch.autograd.Function):
+class _MXFP8LinearFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, hidden, master_weight, module):
+    def forward(ctx, x, master_weight, module):
         module._sync_if_needed()
-        state = module._forward_state(hidden)
-        out = state(hidden, module._weight_fp8, module._weight_scale)
+        state = module._forward_state(x)
+        out = state(x, module._weight_fp8, module._weight_scale)
         ctx.module = module
         ctx.save_for_backward(
-            hidden,
+            x,
             master_weight,
             module._weight_fp8,
             module._weight_scale,
-            state.quantize.row_fp8,
-            state.quantize.row_scale,
             state.quantize.column_fp8,
             state.quantize.column_scale,
         )
@@ -138,41 +127,31 @@ class _DownFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dy):
-        (
-            hidden,
-            master_weight,
-            weight_fp8,
-            weight_scale,
-            hidden_row,
-            hidden_row_scale,
-            hidden_column,
-            hidden_column_scale,
-        ) = ctx.saved_tensors
+        x, master_weight, weight_fp8, weight_scale, x_column, x_column_scale = (
+            ctx.saved_tensors
+        )
         dy = dy.contiguous()
         if dy.dtype != torch.bfloat16:
             dy = dy.to(torch.bfloat16)
         state = ctx.module._backward_state(
             dy,
-            hidden,
-            hidden_row,
-            hidden_row_scale,
-            hidden_column,
-            hidden_column_scale,
+            x_column,
+            x_column_scale,
             weight_fp8,
             weight_scale,
         )
         dx, dw = state(
             dy,
-            hidden_column,
-            hidden_column_scale,
+            x_column,
+            x_column_scale,
             weight_fp8,
             weight_scale,
         )
         return dx, dw.float(), None
 
 
-class MXFP8DownProjection(nn.Module):
-    """No-bias down projection with pure MXFP8 forward and backward GEMMs."""
+class MXFP8Linear(nn.Module):
+    """Bias-free FP32-master linear using pure-MXFP8 forward and backward."""
 
     def __init__(
         self,
@@ -180,12 +159,14 @@ class MXFP8DownProjection(nn.Module):
         out_features,
         *,
         device=None,
-        forward_config=70,
+        forward_config=8,
         dx_config=12,
         dw_config=12,
         raster_group=13,
     ):
         super().__init__()
+        if in_features % 64 or out_features % 64:
+            raise ValueError("in_features and out_features must be multiples of 64")
         self.in_features = in_features
         self.out_features = out_features
         self.forward_config = forward_config
@@ -209,6 +190,7 @@ class MXFP8DownProjection(nn.Module):
         self._fp8_dirty = False
         self._forward_states = {}
         self._backward_states = {}
+        self._optimizer_hook = None
         self.reset_parameters()
         self.refresh_fp8_weight()
 
@@ -221,8 +203,7 @@ class MXFP8DownProjection(nn.Module):
 
     def refresh_fp8_weight(self):
         if not self.master_weight.is_cuda:
-            raise RuntimeError("MXFP8DownProjection requires CUDA")
-
+            raise RuntimeError("MXFP8Linear requires CUDA")
         with torch.no_grad():
             self._weight_fp8, self._weight_scale = quantize_weight(
                 self.master_weight.detach()
@@ -255,18 +236,17 @@ class MXFP8DownProjection(nn.Module):
         self._sync_if_needed()
         return self._weight_fp8, self._weight_scale
 
-    def _forward_state(self, hidden):
-        self._sync_if_needed()
+    def _forward_state(self, x):
         key = (
-            hidden.device.index,
-            tuple(hidden.shape),
+            x.device.index,
+            tuple(x.shape),
             self.forward_config,
             self.raster_group,
         )
         state = self._forward_states.get(key)
         if state is None:
             state = _ForwardState(
-                hidden,
+                x,
                 self._weight_fp8,
                 self._weight_scale,
                 self.forward_config,
@@ -278,18 +258,15 @@ class MXFP8DownProjection(nn.Module):
     def _backward_state(
         self,
         dy,
-        hidden,
-        hidden_row,
-        hidden_row_scale,
-        hidden_column,
-        hidden_column_scale,
+        x_column,
+        x_column_scale,
         weight_fp8,
         weight_scale,
     ):
         key = (
             dy.device.index,
             tuple(dy.shape),
-            tuple(hidden_column.shape),
+            tuple(x_column.shape),
             self.dx_config,
             self.dw_config,
             self.raster_group,
@@ -298,11 +275,8 @@ class MXFP8DownProjection(nn.Module):
         if state is None:
             state = _BackwardState(
                 dy,
-                hidden,
-                hidden_row,
-                hidden_row_scale,
-                hidden_column,
-                hidden_column_scale,
+                x_column,
+                x_column_scale,
                 weight_fp8,
                 weight_scale,
                 self.dx_config,
@@ -312,18 +286,24 @@ class MXFP8DownProjection(nn.Module):
             self._backward_states[key] = state
         return state
 
-    def forward(self, hidden):
-        if hidden.ndim != 2 or hidden.shape[1] != self.in_features:
+    def bind_optimizer(self, optimizer):
+        if self._optimizer_hook is not None:
+            self._optimizer_hook.remove()
+        self._optimizer_hook = bind_fp8_optimizer(self, optimizer)
+        return self
+
+    def forward(self, x):
+        if x.ndim != 2 or x.shape[1] != self.in_features:
             raise ValueError(
-                f"expected hidden [M,{self.in_features}], got {tuple(hidden.shape)}"
+                f"expected input [M,{self.in_features}], got {tuple(x.shape)}"
             )
-        if hidden.dtype != torch.bfloat16 or not hidden.is_cuda:
-            raise TypeError("expected CUDA BF16 hidden")
-        return _DownFunction.apply(hidden.contiguous(), self.master_weight, self)
+        if x.dtype != torch.bfloat16 or not x.is_cuda:
+            raise TypeError("expected CUDA BF16 input")
+        return _MXFP8LinearFunction.apply(x.contiguous(), self.master_weight, self)
 
     def extra_repr(self):
         return (
             f"in_features={self.in_features}, out_features={self.out_features}, "
-            f"forward_config={self.forward_config}, dx_config={self.dx_config}, "
-            f"dw_config={self.dw_config}"
+            f"bias=False, forward_config={self.forward_config}, "
+            f"dx_config={self.dx_config}, dw_config={self.dw_config}"
         )

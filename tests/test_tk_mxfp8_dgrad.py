@@ -1,8 +1,8 @@
 """MXFP8 swapAB dX: operand layouts/scales, TMA tails, persistent reuse."""
 import pytest
 import torch
-from experiments.tk_mxfp8_dgrad import Library,build,OUTPUT,ROOT,CONFIGS
-from experiments.tk_mxfp8_gemm import pack_a_scales
+from mxfp8._kernels.dgrad import Library,build,OUTPUT,ROOT,CONFIGS
+from mxfp8._kernels.gemm import pack_a_scales
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()!=(12,0),
                             reason='SM120 required')

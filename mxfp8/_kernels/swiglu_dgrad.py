@@ -6,13 +6,12 @@ forward 32x32 scale grid. FP32 accumulation is written once as BF16.
 """
 
 import ctypes as ct
-from pathlib import Path
 import re
 import subprocess
 
 import torch
 
-from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
+from .._core import ROOT, FLAGS, nvcc_path
 
 OUTPUT = ROOT / "runs/tk_mxfp8_swiglu_dgrad"
 CONFIGS = [

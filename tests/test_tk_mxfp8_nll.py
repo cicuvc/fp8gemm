@@ -4,11 +4,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import experiments.tk_mxfp8_fused_ce as ce_module
-from experiments.mxfp8_core import quantize_weight
-from experiments.tk_mxfp8_fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
-from experiments.tk_mxfp8_gemm import Library as GemmLibrary
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+import mxfp8._impl.fused_ce as ce_module
+from mxfp8._core import quantize_weight
+from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
+from mxfp8._kernels.gemm import Library as GemmLibrary
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_fused_ce import inputs
 from tests.test_tk_mxfp8_balance import reference_weights
 

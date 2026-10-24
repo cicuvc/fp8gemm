@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from experiments.tk_mxfp8_fused_ce import (
+from ._impl.fused_ce import (
     MXFP8FusedLinearCrossEntropy as _ExperimentFusedLinearCrossEntropy,
 )
 

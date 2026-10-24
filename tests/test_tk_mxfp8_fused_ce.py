@@ -4,14 +4,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from experiments.mxfp8_core import quantize_weight
-from experiments.mxfp8_ce import CEPlan, merge_lse
-from experiments.tk_mxfp8_gemm import Library as GemmLibrary
-from experiments.tk_mxfp8_lse import Library as LSELibrary, CONFIGS
-from experiments.tk_mxfp8_dgrad import Library as DgradLibrary
-from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
-from experiments.tk_mxfp8_fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
+from mxfp8._core import quantize_weight
+from mxfp8._impl.ce import CEPlan, merge_lse
+from mxfp8._kernels.gemm import Library as GemmLibrary
+from mxfp8._kernels.lse import Library as LSELibrary, CONFIGS
+from mxfp8._kernels.dgrad import Library as DgradLibrary
+from mxfp8._kernels.wgrad import Library as WgradLibrary
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
+from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

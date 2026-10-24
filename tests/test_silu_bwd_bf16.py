@@ -8,7 +8,7 @@ import subprocess
 import pytest
 import torch
 
-from experiments.tk_silu_bwd import (
+from mxfp8._kernels.silu import (
     OUTPUT,
     ROOT,
     SiluBwdLibrary,

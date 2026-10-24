@@ -8,8 +8,8 @@ column quantization of X for dWg/dWu.
 
 import torch
 
-from experiments.tk_mxfp8_swiglu_dgrad import SwiGLUDgradLibrary
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from .._kernels.silu import SiluBwdQuantizeLibrary
+from .._kernels.swiglu_dgrad import SwiGLUDgradLibrary
 
 
 class MXFP8SwiGLUBackward:
@@ -32,7 +32,7 @@ class MXFP8SwiGLUBackward:
         wgrad_config=12,
         raster_group=13,
     ):
-        from experiments.tk_mxfp8_wgrad import Library as WgradLibrary
+        from .._kernels.wgrad import Library as WgradLibrary
 
         if (
             x.ndim != 2
@@ -68,9 +68,7 @@ class MXFP8SwiGLUBackward:
             None if x_column_scale is None else x_column_scale.shape
         )
         self.quantize_x = (
-            None
-            if x_column is not None
-            else SiluBwdQuantizeLibrary().plan_direct(x)
+            None if x_column is not None else SiluBwdQuantizeLibrary().plan_direct(x)
         )
         self.dx_plan = SwiGLUDgradLibrary().plan(
             self.quantize.gate_row,
@@ -166,7 +164,9 @@ class MXFP8SwiGLUBackward:
                 (x.shape[0], x.shape[1]),
                 device=x.device,
                 dtype=torch.bfloat16,
-            ) if reallocate else None,
+            )
+            if reallocate
+            else None,
         )
         self.gate_weight_grad.rebind(
             self.quantize.gate_col,
@@ -177,7 +177,9 @@ class MXFP8SwiGLUBackward:
                 (weight_gate.shape[0], weight_gate.shape[1]),
                 device=x.device,
                 dtype=torch.bfloat16,
-            ) if reallocate else None,
+            )
+            if reallocate
+            else None,
         )
         self.up_weight_grad.rebind(
             self.quantize.up_col,
@@ -188,7 +190,9 @@ class MXFP8SwiGLUBackward:
                 (weight_up.shape[0], weight_up.shape[1]),
                 device=x.device,
                 dtype=torch.bfloat16,
-            ) if reallocate else None,
+            )
+            if reallocate
+            else None,
         )
         self.dy, self.half_gate, self.up, self.x = dy, half_gate, up, x
         self.weight_gate, self.weight_up = weight_gate, weight_up
@@ -220,9 +224,9 @@ class MXFP8SwiGLUBackward:
 
 
 def build():
-    from experiments.tk_mxfp8_swiglu_dgrad import build as build_dx
-    from experiments.tk_mxfp8_wgrad import build as build_wgrad
-    from experiments.tk_silu_bwd import build as build_elementwise
+    from .._kernels.silu import build as build_elementwise
+    from .._kernels.swiglu_dgrad import build as build_dx
+    from .._kernels.wgrad import build as build_wgrad
 
     build_elementwise()
     build_dx()

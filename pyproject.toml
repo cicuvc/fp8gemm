@@ -14,8 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["mxfp8", "experiments"]
-py-modules = ["fp8_adamw"]
+packages = ["mxfp8", "mxfp8._impl", "mxfp8._kernels"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

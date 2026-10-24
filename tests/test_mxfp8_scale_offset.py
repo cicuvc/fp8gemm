@@ -3,9 +3,9 @@
 import pytest
 import torch
 
-from experiments.mxfp8_core import quantize_weight
-from experiments.tk_rmsnorm import RMSNormDualQuantPlan
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._core import quantize_weight
+from mxfp8._impl.rmsnorm import RMSNormDualQuantPlan
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

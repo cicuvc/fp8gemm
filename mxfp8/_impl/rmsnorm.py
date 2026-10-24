@@ -58,9 +58,7 @@ def _online_scale(x: tl.tensor):
         True,
         2,
     )
-    quantized = tl.cast(
-        x * reciprocal[:, :, None], tl.float8e4nv
-    ).reshape(rows, cols)
+    quantized = tl.cast(x * reciprocal[:, :, None], tl.float8e4nv).reshape(rows, cols)
     return quantized, tl.cast(scale_u16 >> 7, tl.uint8)
 
 
@@ -130,11 +128,9 @@ def _rmsnorm_dual_quant(
         mask=col_mask,
         other=0.0,
     ).to(tl.float32)
-    normalized = (
-        values.to(tl.float32)
-        * inv[:, None]
-        * scale_factor[None, :]
-    ).to(tl.bfloat16)
+    normalized = (values.to(tl.float32) * inv[:, None] * scale_factor[None, :]).to(
+        tl.bfloat16
+    )
     if WRITE_BF16:
         tl.store(
             y_bf16 + rows[:, None] * y_stride + cols[None, :],
@@ -150,8 +146,7 @@ def _rmsnorm_dual_quant(
     )
     # BLOCK_K is 128, exactly four K32 scale blocks per packed word.
     row_word = tl.sum(
-        row_s.to(tl.uint32)
-        << (8 * tl.arange(0, 4))[None, :],
+        row_s.to(tl.uint32) << (8 * tl.arange(0, 4))[None, :],
         axis=1,
     )
     tl.store(
@@ -168,9 +163,7 @@ def _rmsnorm_dual_quant(
     )
     column_values = tl.reshape(column_s, (BLOCK_K,))
     tl.store(
-        column_scale
-        + ((row_block // 4) * SP + cols) * 4
-        + (row_block % 4),
+        column_scale + ((row_block // 4) * SP + cols) * 4 + (row_block % 4),
         column_values,
         mask=cols < SP,
     )
@@ -362,9 +355,7 @@ def _rmsnorm_backward(
     ).to(tl.float32)
     dy_scaled = dy_values * scale_factor[None, :]
     correction = (inverse * inverse / K) * tl.load(dot + rows, mask=row_mask, other=0.0)
-    grad_x = inverse[:, None] * (
-        dy_scaled - correction[:, None] * x_values
-    )
+    grad_x = inverse[:, None] * (dy_scaled - correction[:, None] * x_values)
     tl.store(
         dx + rows[:, None] * dx_stride + cols[None, :],
         grad_x.to(tl.bfloat16),
@@ -414,8 +405,7 @@ class RMSNormBackwardPlan:
         if inverse_rms.shape != (x.shape[0],) or inverse_rms.dtype != torch.float32:
             raise ValueError("Expected FP32 inverse_rms[M]")
         if not x.is_cuda or any(
-            tensor.device != x.device
-            for tensor in [dy, factor, inverse_rms]
+            tensor.device != x.device for tensor in [dy, factor, inverse_rms]
         ):
             raise ValueError("Expected all tensors on one CUDA device")
         self.dy, self.x, self.factor = dy, x, factor
@@ -458,9 +448,7 @@ class RMSNormBackwardPlan:
         self.dx = torch.empty(
             (self.m, self.k), device=self.device, dtype=torch.bfloat16
         )
-        self.factor_grad = torch.empty(
-            self.k, device=self.device, dtype=torch.float32
-        )
+        self.factor_grad = torch.empty(self.k, device=self.device, dtype=torch.float32)
         self.factor_partial = torch.empty(
             (self.row_blocks, self.k), device=self.device, dtype=torch.float32
         )
@@ -584,18 +572,15 @@ def _add_rmsnorm_output(
     row_mask = rows < M
     col_mask = cols < K
     mask = row_mask[:, None] & col_mask[None, :]
-    summed = (
-        tl.load(
-            x + rows[:, None] * x_stride + cols[None, :],
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-        + tl.load(
-            residual + rows[:, None] * residual_stride + cols[None, :],
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-    )
+    summed = tl.load(
+        x + rows[:, None] * x_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32) + tl.load(
+        residual + rows[:, None] * residual_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
     inverse = tl.load(
         inverse_rms + rows,
         mask=row_mask,
@@ -625,8 +610,7 @@ def _add_rmsnorm_output(
             mask=mask,
         )
         row_word = tl.sum(
-            row_s.to(tl.uint32)
-            << (8 * tl.arange(0, 4))[None, :],
+            row_s.to(tl.uint32) << (8 * tl.arange(0, 4))[None, :],
             axis=1,
         )
         tl.store(
@@ -642,9 +626,7 @@ def _add_rmsnorm_output(
         )
         column_values = tl.reshape(column_s, (BLOCK_K,))
         tl.store(
-            column_scale
-            + ((row_block // 4) * SP + cols) * 4
-            + (row_block % 4),
+            column_scale + ((row_block // 4) * SP + cols) * 4 + (row_block % 4),
             column_values,
             mask=cols < SP,
         )
@@ -698,12 +680,8 @@ class FusedAddRMSNormPlan:
         self.y_mode = self.Y_MODES[y_mode]
         self.write_sum = bool(write_sum)
         self.inverse_rms = torch.empty(m, device=x.device, dtype=torch.float32)
-        self.sum_out = (
-            torch.empty_like(x) if self.write_sum else None
-        )
-        self.y_bf16 = (
-            torch.empty_like(x) if self.y_mode == self.Y_BF16 else None
-        )
+        self.sum_out = torch.empty_like(x) if self.write_sum else None
+        self.y_bf16 = torch.empty_like(x) if self.y_mode == self.Y_BF16 else None
         if self.y_mode == self.Y_MXFP8:
             self.row_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
             self.row_scale = torch.zeros(
@@ -734,8 +712,7 @@ class FusedAddRMSNormPlan:
         if (factor is None) != (self.factor is None):
             raise ValueError("Factor presence must match the plan")
         if factor is not None and (
-            factor.shape != self.factor.shape
-            or factor.dtype != self.factor.dtype
+            factor.shape != self.factor.shape or factor.dtype != self.factor.dtype
         ):
             raise ValueError("Factor shape or dtype changed")
         tensors = [x, residual] + ([factor] if factor is not None else [])
@@ -775,9 +752,7 @@ class FusedAddRMSNormPlan:
                 if self.column_scale is not None
                 else self.x
             )
-            _add_rmsnorm_output[
-                (self.mp // 32, triton.cdiv(self.k, 128))
-            ](
+            _add_rmsnorm_output[(self.mp // 32, triton.cdiv(self.k, 128))](
                 self.x,
                 self.residual,
                 factor,
@@ -837,18 +812,15 @@ def _fused_add_dot(
         mask=mask,
         other=0.0,
     ).to(tl.float32)
-    summed = (
-        tl.load(
-            x + row * x_stride + cols,
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-        + tl.load(
-            residual + row * residual_stride + cols,
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-    )
+    summed = tl.load(
+        x + row * x_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32) + tl.load(
+        residual + row * residual_stride + cols,
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
     if HAS_FACTOR:
         scale_factor = tl.load(
             factor + cols * factor_stride,
@@ -895,18 +867,15 @@ def _fused_add_rmsnorm_backward(
         mask=mask,
         other=0.0,
     ).to(tl.float32)
-    summed = (
-        tl.load(
-            x + rows[:, None] * x_stride + cols[None, :],
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-        + tl.load(
-            residual + rows[:, None] * residual_stride + cols[None, :],
-            mask=mask,
-            other=0.0,
-        ).to(tl.float32)
-    )
+    summed = tl.load(
+        x + rows[:, None] * x_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32) + tl.load(
+        residual + rows[:, None] * residual_stride + cols[None, :],
+        mask=mask,
+        other=0.0,
+    ).to(tl.float32)
     inverse = tl.load(
         inverse_rms + rows,
         mask=row_mask,
@@ -923,9 +892,7 @@ def _fused_add_rmsnorm_backward(
         dy_scaled = dy_values
     dot_value = tl.load(dot + rows, mask=row_mask, other=0.0)
     correction = (inverse * inverse / K) * dot_value
-    grad_sum = inverse[:, None] * (
-        dy_scaled - correction[:, None] * summed
-    )
+    grad_sum = inverse[:, None] * (dy_scaled - correction[:, None] * summed)
     if HAS_DSUM:
         grad_sum += tl.load(
             dsum + rows[:, None] * dx_stride + cols[None, :],
@@ -1043,9 +1010,12 @@ class FusedAddRMSNormBackwardPlan:
             or not dsum.is_contiguous()
         ):
             raise ValueError("Expected contiguous BF16 dsum[M,K]")
-        tensors = [dy, x, residual] + (
-            [factor] if factor is not None else []
-        ) + ([dsum] if dsum is not None else []) + [inverse_rms]
+        tensors = (
+            [dy, x, residual]
+            + ([factor] if factor is not None else [])
+            + ([dsum] if dsum is not None else [])
+            + [inverse_rms]
+        )
         if any(
             tensor.device != self.dx.device or not tensor.is_contiguous()
             for tensor in tensors
@@ -1058,9 +1028,7 @@ class FusedAddRMSNormBackwardPlan:
     def allocate_workspace(self):
         device = self.device
         self.dot = torch.empty(self.m, device=device, dtype=torch.float32)
-        self.dx = torch.empty(
-            (self.m, self.k), device=device, dtype=torch.bfloat16
-        )
+        self.dx = torch.empty((self.m, self.k), device=device, dtype=torch.bfloat16)
         self.dresidual = self.dx
         self.factor_grad = (
             torch.empty(self.k, device=device, dtype=torch.bfloat16)
@@ -1099,9 +1067,7 @@ class FusedAddRMSNormBackwardPlan:
         )
         partial = self.factor_partial if self.factor_partial is not None else self.dot
         dsum = self.dsum if self.dsum is not None else self.dy
-        _fused_add_rmsnorm_backward[
-            (self.row_blocks, triton.cdiv(self.k, 128))
-        ](
+        _fused_add_rmsnorm_backward[(self.row_blocks, triton.cdiv(self.k, 128))](
             self.dy,
             self.x,
             self.residual,

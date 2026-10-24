@@ -3,13 +3,13 @@
 import pytest
 import torch
 
-from experiments.tk_rmsnorm import (
+from mxfp8._impl.rmsnorm import (
     FusedAddRMSNormBackwardPlan,
     FusedAddRMSNormPlan,
     RMSNormBackwardPlan,
     RMSNormDualQuantPlan,
 )
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(),

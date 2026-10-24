@@ -10,8 +10,7 @@ from typing import Callable
 
 import torch
 
-
-ROOT = Path(__file__).resolve().parents[1]
+from ._core import ROOT
 
 
 @dataclass(frozen=True)
@@ -31,12 +30,12 @@ def _path(*parts: str) -> Path:
 
 def _extension_spec(name: str) -> ExtensionSpec:
     if name == "quantize":
-        from experiments import tk_weight_quantize
+        from ._kernels import weight_quantize
 
         return ExtensionSpec(
             name,
-            tk_weight_quantize.build,
-            (tk_weight_quantize.DEFAULT_OUTPUT / "libquant.so",),
+            weight_quantize.build,
+            (weight_quantize.DEFAULT_OUTPUT / "libquant.so",),
             (
                 _path("cuda/persistent_weight_quantize.cu"),
                 _path("cuda/mxfp8_quantize.cuh"),
@@ -45,14 +44,14 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "silu":
-        from experiments import tk_silu_bwd
+        from ._kernels import silu
 
         return ExtensionSpec(
             name,
-            tk_silu_bwd.build,
+            silu.build,
             (
-                tk_silu_bwd.OUTPUT / "libsilu_bwd.so",
-                tk_silu_bwd.OUTPUT / "libsilu_bwd_quantize.so",
+                silu.OUTPUT / "libsilu_bwd.so",
+                silu.OUTPUT / "libsilu_bwd_quantize.so",
             ),
             (
                 _path("cuda/silu_bwd_elementwise.cu"),
@@ -62,12 +61,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "gemm":
-        from experiments import tk_mxfp8_gemm
+        from ._kernels import gemm
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_gemm.build,
-            (tk_mxfp8_gemm.OUTPUT / "libgemm.so",),
+            gemm.build,
+            (gemm.OUTPUT / "libgemm.so",),
             (
                 _path("cuda/persistent_mxfp8_gemm.cu"),
                 _path("cuda/mxfp8_configs.inc"),
@@ -78,12 +77,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "dgrad":
-        from experiments import tk_mxfp8_dgrad
+        from ._kernels import dgrad
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_dgrad.build,
-            (tk_mxfp8_dgrad.OUTPUT / "libdgrad.so",),
+            dgrad.build,
+            (dgrad.OUTPUT / "libdgrad.so",),
             (
                 _path("cuda/persistent_mxfp8_dgrad.cu"),
                 _path("cuda/mxfp8_dgrad_configs.inc"),
@@ -92,12 +91,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "wgrad":
-        from experiments import tk_mxfp8_wgrad
+        from ._kernels import wgrad
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_wgrad.build,
-            (tk_mxfp8_wgrad.OUTPUT / "libwgrad.so",),
+            wgrad.build,
+            (wgrad.OUTPUT / "libwgrad.so",),
             (
                 _path("cuda/persistent_mxfp8_wgrad.cu"),
                 _path("cuda/mxfp8_wgrad_configs.inc"),
@@ -106,12 +105,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "swiglu":
-        from experiments import tk_mxfp8_swiglu
+        from ._kernels import swiglu
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_swiglu.build,
-            (tk_mxfp8_swiglu.OUTPUT / "libswiglu.so",),
+            swiglu.build,
+            (swiglu.OUTPUT / "libswiglu.so",),
             (
                 _path("cuda/persistent_mxfp8_swiglu.cu"),
                 _path("cuda/mxfp8_swiglu_configs.inc"),
@@ -120,12 +119,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "swiglu_dgrad":
-        from experiments import tk_mxfp8_swiglu_dgrad
+        from ._kernels import swiglu_dgrad
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_swiglu_dgrad.build,
-            (tk_mxfp8_swiglu_dgrad.OUTPUT / "libswd.so",),
+            swiglu_dgrad.build,
+            (swiglu_dgrad.OUTPUT / "libswd.so",),
             (
                 _path("cuda/persistent_mxfp8_swiglu_dgrad.cu"),
                 _path("cuda/mxfp8_swiglu_dgrad_configs.inc"),
@@ -134,12 +133,12 @@ def _extension_spec(name: str) -> ExtensionSpec:
             ),
         )
     if name == "lse":
-        from experiments import tk_mxfp8_lse
+        from ._kernels import lse
 
         return ExtensionSpec(
             name,
-            tk_mxfp8_lse.build,
-            (tk_mxfp8_lse.OUTPUT / "liblse.so",),
+            lse.build,
+            (lse.OUTPUT / "liblse.so",),
             (
                 _path("cuda/persistent_mxfp8_lse.cu"),
                 _path("cuda/persistent_mxfp8_gemm.cu"),
@@ -188,7 +187,9 @@ def _expand(names: tuple[str, ...]) -> tuple[str, ...]:
             candidates = (name,)
         else:
             valid = ", ".join(sorted((*_GROUPS, *_EXTENSIONS)))
-            raise ValueError(f"unknown MXFP8 extension group {name!r}; choose from {valid}")
+            raise ValueError(
+                f"unknown MXFP8 extension group {name!r}; choose from {valid}"
+            )
         for candidate in candidates:
             if candidate not in expanded:
                 expanded.append(candidate)

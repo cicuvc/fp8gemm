@@ -57,7 +57,7 @@ def quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     if weight.ndim != 2 or weight.dtype != torch.float32 or not weight.is_cuda:
         raise ValueError("Expected CUDA FP32 weight[N,K]")
     if _weight_quant_library is None:
-        from experiments.tk_weight_quantize import QuantLibrary
+        from ._kernels.weight_quantize import QuantLibrary
 
         _weight_quant_library = QuantLibrary()
     plan = _weight_quant_library.plan(weight, round_bf16=True)

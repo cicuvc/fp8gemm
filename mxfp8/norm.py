@@ -5,8 +5,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from experiments.tk_rmsnorm import RMSNormBackwardPlan, RMSNormDualQuantPlan
-
+from ._impl.rmsnorm import RMSNormBackwardPlan, RMSNormDualQuantPlan
 from .runtime import require_sm120
 
 
@@ -16,6 +15,7 @@ class _ForwardState:
             x.contiguous(),
             weight.contiguous(),
             eps=eps,
+            write_bf16=True,
         )
 
     def __call__(self, x, weight):

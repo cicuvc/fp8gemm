@@ -5,14 +5,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from experiments.tk_mxfp8_swiglu import (
+from mxfp8._kernels.swiglu import (
     CONFIGS,
     MXFP8SwiGLULibrary,
     OUTPUT,
     ROOT,
     build,
 )
-from experiments.tk_mxfp8_gemm import pack_a_scales
+from mxfp8._kernels.gemm import pack_a_scales
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

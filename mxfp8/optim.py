@@ -3,8 +3,8 @@
 from torch import nn
 from torch.optim import Optimizer
 
-from experiments.mxfp8_core import bind_fp8_optimizer
-from fp8_adamw import FusedAdamWMXFP8
+from ._core import bind_fp8_optimizer
+from .adamw import FusedAdamWMXFP8
 
 
 def bind_optimizer(module: nn.Module, optimizer: Optimizer):

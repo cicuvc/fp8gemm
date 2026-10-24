@@ -3,11 +3,11 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_down import MXFP8DownProjection
-from experiments.tk_mxfp8_swiglu import MXFP8SwiGLULibrary
-from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward
-from experiments.tk_mxfp8_swiglu_layer import MXFP8SwiGLU
-from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+from mxfp8._impl.down import MXFP8DownProjection
+from mxfp8._kernels.swiglu import MXFP8SwiGLULibrary
+from mxfp8._impl.swiglu_backward import MXFP8SwiGLUBackward
+from mxfp8._impl.swiglu import MXFP8SwiGLU
+from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),

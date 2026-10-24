@@ -7,8 +7,8 @@ import subprocess
 import pytest
 import torch
 
-from experiments.tk_mxfp8_gemm import pack_a_scales
-from experiments.tk_mxfp8_swiglu_dgrad import (
+from mxfp8._kernels.gemm import pack_a_scales
+from mxfp8._kernels.swiglu_dgrad import (
     CONFIGS,
     OUTPUT,
     ROOT,

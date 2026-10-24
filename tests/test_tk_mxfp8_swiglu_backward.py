@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from experiments.tk_mxfp8_swiglu_backward import MXFP8SwiGLUBackward, build
+from mxfp8._impl.swiglu_backward import MXFP8SwiGLUBackward, build
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
@@ -13,9 +13,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module", autouse=True)
 def compiled():
-    from experiments.tk_mxfp8_swiglu_dgrad import OUTPUT as DX_OUTPUT
-    from experiments.tk_mxfp8_wgrad import OUTPUT as WGRAD_OUTPUT
-    from experiments.tk_silu_bwd import OUTPUT as ELEMENTWISE_OUTPUT
+    from mxfp8._kernels.swiglu_dgrad import OUTPUT as DX_OUTPUT
+    from mxfp8._kernels.wgrad import OUTPUT as WGRAD_OUTPUT
+    from mxfp8._kernels.silu import OUTPUT as ELEMENTWISE_OUTPUT
 
     binaries = [
         DX_OUTPUT / "libswd.so",
@@ -85,8 +85,8 @@ def test_shapes_reuse_and_graph():
 
 
 def test_wgrad_outputs_match_existing_kernel_chain():
-    from experiments.tk_mxfp8_wgrad import Library
-    from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
+    from mxfp8._kernels.wgrad import Library
+    from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 
     m, n, k = 137, 128, 128
     values = inputs(m, n, k)
