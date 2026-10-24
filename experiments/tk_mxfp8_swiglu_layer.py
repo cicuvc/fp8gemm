@@ -40,7 +40,16 @@ class _ForwardState:
             up_out=self.up_linear,
         )
 
-    def __call__(self):
+    def __call__(self, x, gate_weight, gate_scale, up_weight, up_scale):
+        self.quantize_x.rebind(x)
+        self.forward.rebind(
+            self.quantize_x.row_fp8,
+            self.quantize_x.row_scale,
+            gate_weight,
+            gate_scale,
+            up_weight,
+            up_scale,
+        )
         self.quantize_x()
         return self.forward()
 
@@ -50,7 +59,13 @@ class _MXFP8SwiGLUFunction(torch.autograd.Function):
     def forward(ctx, x, gate_weight, up_weight, layer):
         layer._sync_if_needed()
         state = layer._forward_state(x)
-        out = state()
+        out = state(
+            x,
+            layer._gate_weight_fp8,
+            layer._gate_weight_scale,
+            layer._up_weight_fp8,
+            layer._up_weight_scale,
+        )
         ctx.layer = layer
         ctx.save_for_backward(
             x,
@@ -62,6 +77,8 @@ class _MXFP8SwiGLUFunction(torch.autograd.Function):
             layer._up_weight_scale,
             state.gate_linear,
             state.up_linear,
+            state.quantize_x.column_fp8,
+            state.quantize_x.column_scale,
         )
         return out
 
@@ -77,6 +94,8 @@ class _MXFP8SwiGLUFunction(torch.autograd.Function):
             up_scale,
             gate_linear,
             up_linear,
+            x_column,
+            x_column_scale,
         ) = ctx.saved_tensors
         grad_output = grad_output.contiguous()
         if grad_output.dtype != torch.bfloat16:
@@ -91,8 +110,24 @@ class _MXFP8SwiGLUFunction(torch.autograd.Function):
             gate_scale,
             up_fp8,
             up_scale,
+            x_column,
+            x_column_scale,
+        )
+        state.rebind(
+            grad_output,
+            gate_linear,
+            up_linear,
+            x,
+            gate_fp8,
+            up_fp8,
+            gate_scale,
+            up_scale,
+            x_column,
+            x_column_scale,
+            reallocate=True,
         )
         grad_x, grad_gate, grad_up = state()
+        state.release_workspace()
         return grad_x, grad_gate.float(), grad_up.float(), None
 
 
@@ -201,8 +236,6 @@ class MXFP8SwiGLU(nn.Module):
             self.down_proj.master_weight._version,
         )
         self._fp8_dirty = False
-        self._forward_states.clear()
-        self._backward_states.clear()
         return self
 
     def mark_fp8_dirty(self):
@@ -247,10 +280,7 @@ class MXFP8SwiGLU(nn.Module):
     def _forward_state(self, x):
         key = (
             x.device.index,
-            x.data_ptr(),
             tuple(x.shape),
-            self._gate_weight_fp8.data_ptr(),
-            self._up_weight_fp8.data_ptr(),
             self.forward_config,
             self.raster_group,
         )
@@ -265,7 +295,7 @@ class MXFP8SwiGLU(nn.Module):
                 self.forward_config,
                 self.raster_group,
             )
-            self._forward_states = {key: state}
+            self._forward_states[key] = state
         return state
 
     def _backward_state(
@@ -278,15 +308,13 @@ class MXFP8SwiGLU(nn.Module):
         gate_scale,
         up_fp8,
         up_scale,
+        x_column,
+        x_column_scale,
     ):
         key = (
             dy.device.index,
-            dy.data_ptr(),
-            x.data_ptr(),
-            gate_linear.data_ptr(),
-            up_linear.data_ptr(),
-            gate_fp8.data_ptr(),
-            up_fp8.data_ptr(),
+            tuple(dy.shape),
+            tuple(x.shape),
             self.dx_config,
             self.wgrad_config,
             self.raster_group,
@@ -302,11 +330,13 @@ class MXFP8SwiGLU(nn.Module):
                 up_fp8,
                 gate_scale,
                 up_scale,
+                x_column,
+                x_column_scale,
                 dx_config=self.dx_config,
                 wgrad_config=self.wgrad_config,
                 raster_group=self.raster_group,
             )
-            self._backward_states = {key: state}
+            self._backward_states[key] = state
         return state
 
     def bind_optimizer(self, optimizer):

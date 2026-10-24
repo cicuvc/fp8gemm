@@ -14,6 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from experiments.fp8_decoder_transformer import FP8DecoderTransformer
+from experiments.fp8_decoder_postnorm_transformer import (
+    FP8PostNormDecoderTransformer,
+)
 from fp8_adamw import AdamWStateDtype, FusedAdamWMXFP8, optimizer_state_nbytes
 
 
@@ -87,6 +90,7 @@ def main():
     parser.add_argument("--fp8-peak-tflops", type=float, default=419.0)
     parser.add_argument("--no-fused-linear-ce", action="store_true")
     parser.add_argument("--fused-ce-chunks", type=int, default=2)
+    parser.add_argument("--post-norm", action="store_true")
     parser.add_argument("--bf16-adam-state", action="store_true")
     parser.add_argument("--fused-adamw", action="store_true")
     parser.add_argument(
@@ -104,7 +108,12 @@ def main():
 
     torch.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    model = FP8DecoderTransformer(
+    model_class = (
+        FP8PostNormDecoderTransformer
+        if args.post_norm
+        else FP8DecoderTransformer
+    )
+    model = model_class(
         vocab_size=args.vocab_size,
         d_model=args.d_model,
         n_layers=args.n_layers,
@@ -232,6 +241,7 @@ def main():
             "sequence_count": sequence_count,
             "sequence_lengths": sequence_lengths,
             "parameters": sum(p.numel() for p in model.parameters()),
+            "normalization": "post" if args.post_norm else "pre",
         },
         "flops": flops,
         "method": {

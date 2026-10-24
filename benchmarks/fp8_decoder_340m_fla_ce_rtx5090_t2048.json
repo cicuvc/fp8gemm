@@ -1,0 +1,72 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "config_source": "Defaults from 3d58143:experiments/train_decoder_muon.py; vocab size from the referenced tokenizer.",
+  "attention_out_projection": "torch.nn.Linear(dtype=torch.bfloat16)",
+  "loss_backend": "fla.FusedLinearCrossEntropyLoss",
+  "config": {
+    "vocab_size": 32000,
+    "d_model": 1024,
+    "n_layers": 24,
+    "n_heads": 16,
+    "mlp_hidden": 2816,
+    "context_length": 512,
+    "tokens_per_microbatch": 2048,
+    "warmup": 1,
+    "repeats": 3,
+    "fp8_peak_tflops": 419.0,
+    "no_fused_linear_ce": false,
+    "fused_ce_chunks": 2,
+    "output": "benchmarks/fp8_decoder_340m_fla_ce_rtx5090_t2048.json",
+    "sequence_count": 4,
+    "sequence_lengths": [
+      512,
+      512,
+      512,
+      512
+    ],
+    "parameters": 341099520
+  },
+  "flops": {
+    "total": 4319915016192,
+    "fp8_linear": 3478923509760,
+    "bf16_o_projection": 309237645312,
+    "bf16_lm_head": 402653184000,
+    "bf16_attention": 129100677120,
+    "bf16_total": 840991506432
+  },
+  "method": {
+    "forward_backward": "CUDA events; fixed packed-varlen batch; zero_grad, loss, and backward included.",
+    "graph_forward_backward": "Same work with Python layer dispatch removed by CUDA Graph; position IDs are precomputed before capture.",
+    "full_step": "CUDA events; AdamW step and FP8 weight-cache refresh included.",
+    "mfu": "Useful model FLOPs divided by nominal 419 TFLOPS FP8 peak. BF16 O projection, lm head, and attention are included in the numerator, so this is conservative for mixed precision."
+  },
+  "forward_backward": {
+    "median_us": 84653.0532836914,
+    "min_us": 84476.12762451172,
+    "max_us": 86987.58697509766,
+    "samples_us": [
+      86987.58697509766,
+      84653.0532836914,
+      84476.12762451172
+    ],
+    "tflops": 51.03082344490274,
+    "fp8_peak_mfu_percent": 12.179194139594925
+  },
+  "graph_forward_backward": {
+    "unavailable": "FLA fused linear cross-entropy synchronizes on the host to count valid targets and is not CUDA Graph capturable."
+  },
+  "full_step": {
+    "median_us": 99894.27185058594,
+    "min_us": 99783.935546875,
+    "max_us": 99904.38079833984,
+    "samples_us": [
+      99783.935546875,
+      99894.27185058594,
+      99904.38079833984
+    ],
+    "tflops": 43.244872164976506,
+    "fp8_peak_mfu_percent": 10.320971877082698
+  },
+  "peak_memory_gib": 9.064140796661377
+}
