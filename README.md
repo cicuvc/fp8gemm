@@ -1,6 +1,21 @@
 # fp8gemm
 
-SM120（Blackwell RTX）MXFP8 训练原型。`mxfp8` 是面向训练代码的公开入口：
+An experimental MXFP8 training stack for NVIDIA GeForce RTX 50-series gaming
+GPUs (Blackwell, SM120). The goal is to unlock the full MXFP8 Tensor Core
+training throughput of these cards (bf16a32 and fp8a32 are limited while mxfp8a32 are 
+not on these GPUs), covering both forward and backward matrix multiplications, 
+including activation and weight gradients.
+
+The project combines custom CUDA kernels with PyTorch autograd modules,
+quantization, fused loss computation, and optimizer integration. It is intended
+for training workloads that can adopt its BF16 activation and MXFP8 compute
+path. Full Tensor Core utilization is the optimization target; achieved
+end-to-end throughput depends on model shapes, memory traffic, and the rest of
+the training pipeline.
+
+## Usage
+
+`mxfp8` is the public entry point for training code:
 
 ```python
 import torch
@@ -14,17 +29,19 @@ x = torch.randn((256, 1024), device="cuda", dtype=torch.bfloat16)
 y = linear(x)
 ```
 
-## 要求
+## Requirements
 
-- 计算能力严格为 SM120（`compute_120a`）。
-- 输入 activation 为 contiguous CUDA BF16。
-- 线性层和 MLP 为 bias-free，权重为 FP32 master。
-- CUDA toolkit 中的 `nvcc` 必须可用；默认查找 `$CUDA_HOME/bin/nvcc`
-  和 `/usr/local/cuda/bin/nvcc`。
-- 首次创建模块时会按需编译缺少或过期的 `runs/` CUDA 扩展。需要预构建时
-  设置 `MXFP8_NO_AUTO_BUILD=1` 并先调用 `mxfp8.build_extensions()`。
+- SM120 hardware is required; CUDA kernels target `compute_120a`.
+- Input activations must be contiguous CUDA BF16 tensors.
+- Linear layers and MLPs are bias-free and use FP32 master weights.
+- The CUDA toolkit's `nvcc` must be available. The default lookup checks
+  `$CUDA_HOME/bin/nvcc` and `/usr/local/cuda/bin/nvcc`.
+- Missing or outdated CUDA extensions in `runs/` are built on demand when
+  modules are first created. For ahead-of-time builds, call
+  `mxfp8.build_extensions()` before creating modules and set
+  `MXFP8_NO_AUTO_BUILD=1` to disable automatic builds at runtime.
 
-## 公开组件
+## Public components
 
 - `MXFP8Linear`
 - `MXFP8DownProjection`
@@ -34,11 +51,14 @@ y = linear(x)
 - `FusedAdamWMXFP8`
 - `quantize_weight`
 
-模块持有固定 shape 的执行计划和 workspace，只应在一个 CUDA stream 上顺序调用。
-每捕获一个新的 shape 前先运行一次 warmup。使用普通 optimizer 时通过
-`mxfp8.bind_optimizer(model, optimizer)` 刷新所有嵌套的 FP8 权重缓存；
-`FusedAdamWMXFP8` 会直接更新缓存并保持 CUDA Graph 使用的缓冲区地址稳定。
+Modules own execution plans and workspaces for fixed shapes and should be
+called sequentially on a single CUDA stream. Warm up each new shape before
+CUDA Graph capture. When using a standard optimizer, call
+`mxfp8.bind_optimizer(model, optimizer)` to register FP8 weight-cache refreshes
+for all nested modules. `FusedAdamWMXFP8` updates the caches directly while
+keeping buffer addresses stable for CUDA Graph replay.
 
-所有实现都位于 `mxfp8/`：`_kernels/` 是 CUDA adapter，`_impl/` 是内部
-autograd 和组合计划。公开 API 保持无 bias 语义，不兼容
-`torch.nn.Linear` 的参数布局或可选 bias。
+Implementations live in `mxfp8/`: `_kernels/` contains CUDA adapters, and
+`_impl/` contains internal autograd functions and composed execution plans.
+The public API is bias-free and is not a drop-in replacement for
+`torch.nn.Linear`'s parameter layout or optional bias.
