@@ -26,10 +26,10 @@ def _softcap_tanh(z, SOFTCAP: tl.constexpr):
 
 
 @triton.jit
-def _merge_lse(Z, Partial, Target, LSE, Loss, Weight, M: tl.constexpr,
+def _merge_lse(Z, Partial, Target, LSE, Loss, Weight, NLL, M: tl.constexpr,
                V: tl.constexpr, P: tl.constexpr, BP: tl.constexpr,
                IGNORE_INDEX: tl.constexpr, HAS_WEIGHT: tl.constexpr,
-               SOFTCAP: tl.constexpr):
+               SOFTCAP: tl.constexpr, STORE_NLL: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     p = tl.arange(0, BP)
     local = tl.load(Partial + row * P + p, p < P, float('-inf'))
@@ -45,6 +45,8 @@ def _merge_lse(Z, Partial, Target, LSE, Loss, Weight, M: tl.constexpr,
         zy = SOFTCAP * _softcap_tanh(zy, SOFTCAP)
     tl.store(LSE + row, lse)
     loss = tl.where(ignored, 0., lse - zy)
+    if STORE_NLL:
+        tl.store(NLL + row, loss)
     if HAS_WEIGHT:
         loss *= tl.load(Weight + row)
     tl.store(Loss + row, loss)
@@ -97,8 +99,9 @@ def _ce_dual_quantize(Z, LSE, Target, Weight, Row, RowScale, Col, ColScale,
              ec.to(tl.uint8), cols < VP16)
 
 
-def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=-100, row_weight=None, softcap=None):
-    """Merge partials from the same softcap setting; return FP32 LSE/loss[M]."""
+def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=-100,
+              row_weight=None, softcap=None, nll=None):
+    """Return FP32 LSE/loss[M]; optionally store unweighted per-position NLL."""
     m, v = logits.shape
     if (logits.dtype != torch.bfloat16 or not logits.is_cuda or
             not logits.is_contiguous() or m <= 0 or v <= 0):
@@ -115,14 +118,14 @@ def merge_lse(logits, partial_lse, target, *, lse=None, loss=None, ignore_index=
         lse = torch.empty(m, device=logits.device, dtype=torch.float32)
     if loss is None:
         loss = torch.empty_like(lse)
-    for t in (lse, loss):
+    for t in (lse, loss) if nll is None else (lse, loss, nll):
         if t.shape != (m,) or t.dtype != torch.float32 or t.device != logits.device or not t.is_contiguous():
             raise ValueError("Expected contiguous FP32 output[M]")
     p = partial_lse.shape[1]
     with torch.cuda.device(logits.device):
-        _merge_lse[(m,)](logits, partial_lse, target, lse, loss, row_weight, m, v, p,
+        _merge_lse[(m,)](logits, partial_lse, target, lse, loss, row_weight, nll, m, v, p,
                          triton.next_power_of_2(p), ignore_index, row_weight is not None,
-                         softcap, enable_fp_fusion=False)
+                         softcap, nll is not None, enable_fp_fusion=False)
     return lse, loss
 
 
