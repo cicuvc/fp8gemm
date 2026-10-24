@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import torch
-from experiments.mxfp8_core import ROOT,FLAGS
+from experiments.mxfp8_core import ROOT,FLAGS,nvcc_path
 
 OUTPUT=ROOT/'runs/tk_mxfp8_wgrad'
 CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
@@ -20,7 +20,7 @@ CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
 def build(output=OUTPUT):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     with (output/'build.log').open('w') as log:
-        subprocess.run(['/usr/local/cuda/bin/nvcc',*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
+        subprocess.run([nvcc_path(),*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_mxfp8_wgrad.cu','-lcuda','-o',str(output/'libwgrad.so')],
                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=600)
 

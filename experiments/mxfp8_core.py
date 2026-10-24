@@ -1,7 +1,9 @@
 """Shared runtime helpers for the pure-MXFP8 CUDA kernels."""
 
 from collections.abc import Iterable, Iterator
+import os
 from pathlib import Path
+import shutil
 
 import torch
 from torch import nn
@@ -20,6 +22,28 @@ FLAGS = [
 ]
 
 _weight_quant_library = None
+
+
+def cuda_tool_path(name: str) -> str:
+    """Locate a CUDA toolkit executable from CUDA_HOME, PATH, or the default."""
+    cuda_home = os.environ.get("CUDA_HOME")
+    candidates = []
+    if cuda_home:
+        candidates.append(Path(cuda_home) / "bin" / name)
+    candidates.append(Path("/usr/local/cuda/bin") / name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    discovered = shutil.which(name)
+    if discovered is not None:
+        return discovered
+    raise FileNotFoundError(
+        f"could not find CUDA tool {name!r}; set CUDA_HOME or add it to PATH"
+    )
+
+
+def nvcc_path() -> str:
+    return cuda_tool_path("nvcc")
 
 
 def quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import re
 import torch
-from experiments.mxfp8_core import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
 CONFIGS=[tuple(map(int,m[1:])) for m in re.findall(
     r'^CFG\((\d+),(\d+),(\d+),(\d+),(\d+)\);',
     (ROOT/'cuda/mxfp8_configs.inc').read_text(),re.M)]
@@ -15,7 +15,7 @@ def build(output=OUTPUT,movmatrix=False,factored_stores=False):
     extra=['-DFP8GEMM_EPILOGUE_MOVM=1'] if movmatrix else []
     if factored_stores:extra+=['-DFP8GEMM_FACTORED_STORES=1']
     with (output/'build.log').open('w') as log:
-        subprocess.run(['/usr/local/cuda/bin/nvcc',*FLAGS,*extra,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
+        subprocess.run([nvcc_path(),*FLAGS,*extra,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_mxfp8_gemm.cu','-lcuda','-o',str(output/'libgemm.so')],
                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=600)
 def pack_a_scales(scales):

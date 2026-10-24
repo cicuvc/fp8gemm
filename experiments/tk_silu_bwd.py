@@ -6,7 +6,7 @@ import subprocess
 
 import torch
 
-from experiments.mxfp8_core import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
 
 OUTPUT = ROOT / "runs/tk_silu_bwd"
 
@@ -18,7 +18,7 @@ def build():
         ("cuda/silu_bwd_quantize.cu", "libsilu_bwd_quantize.so"),
     ]:
         command = [
-            "/usr/local/cuda/bin/nvcc",
+            nvcc_path(),
             *FLAGS,
             "-Xptxas=-v",
             "-shared",

@@ -21,7 +21,7 @@ import subprocess
 import torch
 from torch import nn
 
-from experiments.mxfp8_core import FLAGS, ROOT, quantize_weight
+from experiments.mxfp8_core import FLAGS, ROOT, nvcc_path, quantize_weight
 from experiments.mxfp8_topk import MergePlan, validate_k
 from experiments.tk_silu_bwd import SiluBwdQuantizeLibrary
 
@@ -35,7 +35,7 @@ def build(output=OUTPUT):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     with (output / "build.log").open("w") as log:
-        subprocess.run(["/usr/local/cuda/bin/nvcc", *FLAGS, "-Xptxas=-v", "-shared",
+        subprocess.run([nvcc_path(), *FLAGS, "-Xptxas=-v", "-shared",
                         "-Xcompiler=-fPIC", "cuda/persistent_mxfp8_topk.cu", "-lcuda",
                         "-o", str(output / "libtopk.so")], cwd=ROOT, stdout=log,
                        stderr=subprocess.STDOUT, check=True, timeout=600)

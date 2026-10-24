@@ -3,7 +3,7 @@ import ctypes as ct
 from pathlib import Path
 import subprocess
 import torch
-from experiments.mxfp8_core import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
 
 DEFAULT_OUTPUT=ROOT/'runs/tk_weight_quantize'
 CONFIGS=[(4,2,True,32),(4,3,True,32),(8,2,True,32),(4,2,False,32),
@@ -13,8 +13,10 @@ CONFIGS=[(4,2,True,32),(4,3,True,32),(8,2,True,32),(4,2,False,32),
 def build(output=DEFAULT_OUTPUT,cuda=Path('/usr/local/cuda')):
     output=Path(output).resolve()
     output.mkdir(parents=True,exist_ok=True)
+    compiler = Path(cuda)/'bin/nvcc'
+    compiler = str(compiler) if compiler.is_file() else nvcc_path()
     with (output/'build.log').open('w') as log:
-        subprocess.run([str(cuda/'bin/nvcc'),*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
+        subprocess.run([compiler,*FLAGS,'-Xptxas=-v','-shared','-Xcompiler=-fPIC',
                         'cuda/persistent_weight_quantize.cu','-lcuda','-o',str(output/'libquant.so')],
                        cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)
 

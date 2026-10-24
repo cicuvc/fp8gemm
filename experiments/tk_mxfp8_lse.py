@@ -13,7 +13,7 @@ import subprocess
 
 import torch
 
-from experiments.mxfp8_core import FLAGS, ROOT
+from experiments.mxfp8_core import FLAGS, ROOT, nvcc_path
 from experiments.mxfp8_ce import _validate_softcap
 
 OUTPUT = ROOT / "runs/tk_mxfp8_lse"
@@ -31,7 +31,7 @@ def build(output=OUTPUT):
     output.mkdir(parents=True, exist_ok=True)
     with (output / "build.log").open("w") as log:
         subprocess.run(
-            ["/usr/local/cuda/bin/nvcc", *FLAGS, "-Xptxas=-v", "-shared",
+            [nvcc_path(), *FLAGS, "-Xptxas=-v", "-shared",
              "-Xcompiler=-fPIC", "cuda/persistent_mxfp8_lse.cu", "-lcuda",
              "-o", str(output / "liblse.so")],
             cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600,

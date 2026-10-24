@@ -12,7 +12,7 @@ import subprocess
 
 import torch
 
-from experiments.mxfp8_core import ROOT, FLAGS
+from experiments.mxfp8_core import ROOT, FLAGS, nvcc_path
 
 OUTPUT = ROOT / "runs/tk_mxfp8_swiglu"
 CONFIGS = [
@@ -29,7 +29,7 @@ def build(output=OUTPUT):
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     command = [
-        "/usr/local/cuda/bin/nvcc",
+        nvcc_path(),
         *FLAGS,
         "-Xptxas=-v",
         "-shared",

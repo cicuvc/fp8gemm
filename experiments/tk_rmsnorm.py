@@ -95,6 +95,7 @@ def _rmsnorm_dual_quant(
     row_scale,
     column_fp8,
     column_scale,
+    y_bf16,
     M,
     K,
     MP,
@@ -104,6 +105,8 @@ def _rmsnorm_dual_quant(
     factor_stride,
     row_stride,
     column_stride,
+    y_stride,
+    WRITE_BF16: tl.constexpr,
     BLOCK_K: tl.constexpr,
 ):
     row_block = tl.program_id(0)
@@ -132,6 +135,12 @@ def _rmsnorm_dual_quant(
         * inv[:, None]
         * scale_factor[None, :]
     ).to(tl.bfloat16)
+    if WRITE_BF16:
+        tl.store(
+            y_bf16 + rows[:, None] * y_stride + cols[None, :],
+            normalized,
+            mask=row_mask[:, None] & col_mask[None, :],
+        )
 
     row_q, row_s = _online_scale(normalized)
     tl.store(
@@ -168,9 +177,13 @@ def _rmsnorm_dual_quant(
 
 
 class RMSNormDualQuantPlan:
-    """Reusable fixed-shape prenorm and two-direction quantization plan."""
+    """Reusable fixed-shape prenorm and two-direction quantization plan.
 
-    def __init__(self, x, factor, *, eps=1e-6):
+    ``write_bf16=True`` also materializes the normalized BF16 activation in
+    ``y_bf16`` while producing both quantization layouts.
+    """
+
+    def __init__(self, x, factor, *, eps=1e-6, write_bf16=False):
         if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda:
             raise ValueError("Expected CUDA BF16 X[M,K]")
         if factor.ndim != 1 or factor.shape[0] != x.shape[1]:
@@ -185,6 +198,7 @@ class RMSNormDualQuantPlan:
         self.x = x
         self.factor = factor
         self.eps = float(eps)
+        self.write_bf16 = bool(write_bf16)
         self.m, self.k = m, k
         self.mp = (m + 127) // 128 * 128
         self.mp16 = (m + 15) // 16 * 16
@@ -203,6 +217,11 @@ class RMSNormDualQuantPlan:
             (self.mp // 128, self.sp),
             device=x.device,
             dtype=torch.int32,
+        )
+        self.y_bf16 = (
+            torch.empty((self.m, self.k), device=x.device, dtype=torch.bfloat16)
+            if self.write_bf16
+            else None
         )
 
     def rebind(self, x, factor):
@@ -239,6 +258,7 @@ class RMSNormDualQuantPlan:
             self.row_scale,
             self.column_fp8,
             self.column_scale.view(torch.uint8),
+            self.y_bf16 if self.y_bf16 is not None else self.x,
             self.m,
             self.k,
             self.mp,
@@ -248,6 +268,8 @@ class RMSNormDualQuantPlan:
             self.factor.stride(0),
             self.k,
             self.k,
+            self.y_bf16.stride(0) if self.y_bf16 is not None else 0,
+            WRITE_BF16=self.write_bf16,
             BLOCK_K=128,
             num_warps=4,
         )
