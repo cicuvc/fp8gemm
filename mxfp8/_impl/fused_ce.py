@@ -5,7 +5,8 @@ averages valid tokens; balance="document" averages the per-document valid-token
 means, excluding empty/all-ignored documents. No bias or smoothing option.
 With autograd enabled, forward computes first-order dX/dW
 chunk by chunk; backward only scales the saved gradients. Z is BF16, LSE/loss
-are FP32, and dZ is independently MXFP8-quantized along both GEMM reduction axes.
+are FP32. Forward and dW use MXFP8; dX uses BF16 dZ @ original BF16 W.
+Forward W has one E8M0 scale per embedding and 32 hidden features.
 
 Example::
 
@@ -14,8 +15,11 @@ Example::
     loss.backward()
 
 Weights may be FP32 masters or BF16 (including a tied embedding parameter).
-Optional quantized_weight=(E4M3, E8M0) avoids requantizing W; the caller must keep
-that cache synchronized. Quantization uses the existing linear's STE convention.
+Optional quantized_weight=(E4M3[V,H], uint8[V,H/32]) avoids requantizing W;
+the caller must keep that rowwise cache synchronized. Use
+quantize_weight_rowwise(), not the blockwise quantize_weight(), to create it.
+The approximate first-order backward uses original W rounded to BF16 for dX,
+and independently quantized dZ/X for dW.
 Build CUDA dependencies with :func:`mxfp8.build_extensions`.
 """
 
@@ -23,8 +27,7 @@ import torch
 from torch import nn
 from torch.autograd.function import once_differentiable
 
-from .._core import quantize_weight
-from .._kernels.dgrad import Library as DgradLibrary
+from .._kernels.rowwise_quantize import quantize_weight_rowwise
 from .._kernels.lse import CONFIGS, Library as LSELibrary
 from .._kernels.silu import SiluBwdQuantizeLibrary
 from .._kernels.wgrad import Library as WgradLibrary
@@ -49,6 +52,7 @@ class _ChunkState:
             config=module.forward_config,
             raster_group=module.raster_group,
             softcap=module.softcap,
+            rowwise_weight=True,
         )
         m = x.shape[0]
         v = w.shape[0]
@@ -56,15 +60,8 @@ class _ChunkState:
         self.ce = self.dx = self.dw = None
         if not need_grad:
             return
-        self.ce = CEPlan(m, v, x.device)
-        self.dx = module._dgrad.plan(
-            self.ce.row_fp8,
-            w,
-            self.ce.row_scale,
-            ws,
-            config=module.dx_config,
-            raster_group=module.raster_group,
-        )
+        self.ce = CEPlan(m, v, x.device, bf16_dgrad=True, inplace=True)
+        self.dx = torch.empty_like(x)
         self.dw = module._wgrad.plan(
             self.ce.column_fp8,
             self.xq.column_fp8,
@@ -74,11 +71,20 @@ class _ChunkState:
             raster_group=module.raster_group,
         )
 
-    def __call__(self, x, target, w, ws, ignore_index, loss, row_weight=None, nll=None):
+    def __call__(
+        self,
+        x,
+        target,
+        w,
+        ws,
+        ignore_index,
+        loss,
+        row_weight=None,
+        nll=None,
+        weight_bf16=None,
+    ):
         self.xq.rebind(x)
         self.gemm.rebind(self.xq.row_fp8, w, self.xq.row_scale, ws)
-        if self.dx is not None:
-            self.dx.rebind(self.ce.row_fp8, w, self.ce.row_scale, ws)
         try:
             self.xq()
             logits, partial = self.gemm()
@@ -95,6 +101,8 @@ class _ChunkState:
             )
             if self.ce is None:
                 return None, None
+            # Loss/LSE/NLL have consumed logits. CE now overwrites this BF16
+            # workspace with dZ; softcap's derivative is computed before stores.
             self.ce(
                 logits,
                 self.lse,
@@ -103,14 +111,14 @@ class _ChunkState:
                 row_weight=row_weight,
                 softcap=self.gemm.softcap,
             )
-            return self.dx(), self.dw()
+            # Explicit output keeps this BF16 GEMM independent of autocast.
+            torch.mm(self.ce.row_bf16, weight_bf16, out=self.dx)
+            return self.dx, self.dw()
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
             # The descriptors are rebound before their next launch.
             self.xq.x = None
             self.gemm.refs = ()
-            if self.dx is not None:
-                self.dx.refs = []
 
 
 @torch.no_grad()
@@ -123,6 +131,9 @@ def _forward(x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_gra
     nll = torch.empty_like(losses) if separate_nll else losses if return_nll else None
     row_weight = doc_counts = None
     with torch.cuda.device(x.device):
+        # Convert once per invocation, outside the chunk loop. BF16 parameters
+        # (including tied embeddings) are used directly. Never use dequantized Wq.
+        weight_bf16 = weight.to(torch.bfloat16) if need_grad else None
         if module.balance == "document":
             row_weight, doc_counts = document_weights(
                 target,
@@ -144,6 +155,7 @@ def _forward(x, target, weight, wq, ws, module, cu_seqlens, return_nll, need_gra
                 losses[start:end],
                 c_weight,
                 c_nll,
+                weight_bf16,
             )
             if need_grad:
                 dx[start:end].copy_(c_dx)
@@ -213,7 +225,12 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     softcap=None disables softcapping. A positive finite constant s applies
     s*tanh(l/s) in FP32 to the raw BF16 logits l. CUDA and Triton both use
     tanh.approx.f32. The chain-rule factor (1-tanh(l/s)**2) is applied before
-    BF16 rounding and dual MXFP8 gradient quantization. No extra buffer is used.
+    BF16 rounding of dZ and MXFP8 column quantization for dW.
+
+    dX uses BF16 dZ @ W.bfloat16(); forward and dW use MXFP8. The legacy
+    dx_config argument is accepted for source compatibility and has no effect.
+    After loss/LSE/NLL are computed, BF16 dZ overwrites the logits workspace;
+    column-quantized dZ for dW retains its separate FP8 buffer.
 
     forward(..., return_nll=True) returns (loss, nll), with FP32 nll[M] before
     token/document balancing and zero at ignored positions. NLL reflects softcap
@@ -257,19 +274,18 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         )
         self.raster_group = raster_group
         self._states = {}
-        self._quant = self._gemm = self._dgrad = self._wgrad = None
+        self._quant = self._gemm = self._wgrad = None
 
     def _state(self, x, w, ws, *, need_grad=True):
         if self._gemm is None:
             self._quant, self._gemm = SiluBwdQuantizeLibrary(), LSELibrary()
-        if need_grad and self._dgrad is None:
-            self._dgrad, self._wgrad = DgradLibrary(), WgradLibrary()
+        if need_grad and self._wgrad is None:
+            self._wgrad = WgradLibrary()
         key = (
             x.device,
             tuple(x.shape),
             tuple(w.shape),
             self.forward_config,
-            self.dx_config,
             self.dw_config,
             self.raster_group,
             self.softcap,
@@ -321,20 +337,22 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
             validate_cu_seqlens(cu_seqlens, x.device)
         if quantized_weight is None:
             with torch.no_grad():
-                wq, ws = quantize_weight(weight.detach().float())
+                wq, ws = quantize_weight_rowwise(weight.detach())
         else:
             wq, ws = quantized_weight
             if (
                 wq.shape != weight.shape
                 or wq.dtype != torch.float8_e4m3fn
-                or ws.shape != (weight.shape[0] // 32, weight.shape[1] // 32)
+                or ws.shape != (weight.shape[0], weight.shape[1] // 32)
                 or ws.dtype != torch.uint8
                 or wq.device != x.device
                 or ws.device != x.device
                 or not wq.is_contiguous()
                 or not ws.is_contiguous()
             ):
-                raise ValueError("Invalid quantized weight cache")
+                raise ValueError(
+                    "Invalid rowwise quantized weight cache; expected E4M3[V,H], uint8[V,H/32]"
+                )
         if not torch.is_grad_enabled() or not (x.requires_grad or weight.requires_grad):
             loss, nll, _, _, _ = _forward(
                 x,

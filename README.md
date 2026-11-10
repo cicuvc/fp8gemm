@@ -50,6 +50,7 @@ y = linear(x)
 - `MXFP8FusedLinearCrossEntropy`
 - `FusedAdamWMXFP8`
 - `quantize_weight`
+- `quantize_weight_rowwise`
 
 Modules own execution plans and workspaces for fixed shapes and should be
 called sequentially on a single CUDA stream. Warm up each new shape before
@@ -57,6 +58,44 @@ CUDA Graph capture. When using a standard optimizer, call
 `mxfp8.bind_optimizer(model, optimizer)` to register FP8 weight-cache refreshes
 for all nested modules. `FusedAdamWMXFP8` updates the caches directly while
 keeping buffer addresses stable for CUDA Graph replay.
+
+## Fused LM-head cross entropy
+
+`MXFP8FusedLinearCrossEntropy` uses MXFP8 for `X @ W.T` and `dZ.T @ X`,
+and BF16 for `dX = dZ @ W`. Forward weights have one E8M0 scale per embedding
+and 32 hidden features: for `W[V,D]`, scales are `uint8[V,D/32]`. V and D
+must still satisfy the selected kernels' alignment requirements. Other layers
+continue to use the existing 32x32 blockwise weight quantization.
+
+```python
+from mxfp8 import MXFP8FusedLinearCrossEntropy, quantize_weight_rowwise
+
+criterion = MXFP8FusedLinearCrossEntropy(chunk_size=1024, balance="token")
+# hidden: contiguous BF16 [tokens,D]; weight: contiguous FP32/BF16 [V,D]
+loss = criterion(hidden, targets, weight)
+loss.backward()
+
+# Optional forward cache; regenerate after each weight update.
+cache = quantize_weight_rowwise(weight)
+loss = criterion(hidden, targets, weight, quantized_weight=cache)
+```
+
+`quantize_weight()` and `FusedAdamWMXFP8`'s bound outputs retain their blockwise
+layout and cannot supply this CE cache. dX always reads the original weight
+rounded to BF16, including when a forward cache is supplied. FP32 weights are
+converted once per invocation; BF16 weights (including tied embeddings) are
+used directly. CE computes dZ in FP32 before rounding it to BF16 for dX and
+independently quantizing it along tokens for dW. This is an approximate
+first-order backward; it does not differentiate the quantizer. dW is accumulated
+across chunks in FP32 and then converted to the parameter dtype.
+
+The legacy `dx_config` argument remains accepted but has no effect on the BF16
+GEMM. After loss/LSE/NLL are computed, BF16 dZ overwrites the logits workspace.
+Column-quantized dZ has a separate FP8 buffer; there is no separate BF16 dZ,
+row-quantized dZ, or second FP8 weight copy. Loss, softcap, balancing,
+ignored targets, and optional NLL keep their existing semantics. Warm up the
+criterion before CUDA Graph capture, and refresh both the original weight and
+any supplied forward cache before replaying an updated training step.
 
 Implementations live in `mxfp8/`: `_kernels/` contains CUDA adapters, and
 `_impl/` contains internal autograd functions and composed execution plans.

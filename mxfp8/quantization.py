@@ -6,6 +6,7 @@ import torch
 
 from ._core import quantize_weight as _quantize_weight
 from ._kernels.gemm import pack_a_scales
+from ._kernels.rowwise_quantize import quantize_weight_rowwise
 from .runtime import ensure_extensions
 
 
@@ -17,4 +18,4 @@ def quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return _quantize_weight(weight)
 
 
-__all__ = ["pack_a_scales", "quantize_weight"]
+__all__ = ["pack_a_scales", "quantize_weight", "quantize_weight_rowwise"]

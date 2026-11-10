@@ -25,7 +25,7 @@ __device__ __forceinline__ int2 mx_raster(int task,int ntiles,int mtiles,int g) 
     int span=g*ntiles,first=task/span*g,rows=min(g,mtiles-first),local=task%span;
     return make_int2(first+local%rows,local/rows);
 }
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false> struct MXConfig {
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false,bool RowwiseB=false> struct MXConfig {
     static_assert(!OnlyQ || SaveQ);
     static_assert(!Softcap || SaveLSE);
     using ATile=kt::st_fp8e4m3<4*R,BK>;
@@ -48,7 +48,7 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
         MXGlobal<ATile> a;MXGlobal<BTile> b;
         [[no_unique_address]] std::conditional_t<OnlyQ,NoQuantizedArgs,MXGlobal<OTile>> out;
         const uint32_t *as; // packed [ceil(K/128),roundup(M,16)] uint32 words
-        const uint8_t *bs; // bs[ceil(N/32),K/32]
+        const uint8_t *bs; // blockwise [ceil(N/32),K/32] or rowwise [N,K/32]
         int m,n,sc,ntiles,mtiles,total,ktiles,raster_group;
         uint32_t as_stride;
         [[no_unique_address]] std::conditional_t<SaveLSE,LSEArgs,NoQuantizedArgs> lse;
@@ -57,7 +57,7 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
     struct ScalePrefetch {
-        uint32_t a[R/16],b;
+        uint32_t a[R/16],b[RowwiseB ? (C/16)*SC : 1];
         __device__ __forceinline__ void load(const Args &args,int mr,int nc,int k,int lane) {
 #pragma unroll
             for(int i=0;i<R/16;i++) {
@@ -65,18 +65,30 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
                 a[i]=(row<args.m && k<args.ktiles)
                     ?args.as[size_t(uint32_t(k)*SC/4)*args.as_stride+uint32_t(row)]:0;
             }
-            // Each lane fetches one byte; consumers broadcast the small set
-            // of distinct B scales with shuffles after the prefetch latency.
-            int row=nc/32+(lane/SC)%SR,col=k*SC+lane%SC;
-            b=(row<(args.n+31)/32 && col<args.sc)
-                ?args.bs[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
+            if constexpr(RowwiseB) {
+#pragma unroll
+                for(int i=0;i<C/16;i++) {
+                    int row=nc+i*16+lane/4+8*(lane&1);
+#pragma unroll
+                    for(int t=0;t<SC;t++) {
+                        int col=k*SC+t;
+                        b[i*SC+t]=(row<args.n && col<args.sc)
+                            ?args.bs[size_t(row)*args.sc+col]:0;
+                    }
+                }
+            } else {
+                // Broadcast the small set of shared 32x32 scales.
+                int row=nc/32+(lane/SC)%SR,col=k*SC+lane%SC;
+                b[0]=(row<(args.n+31)/32 && col<args.sc)
+                    ?args.bs[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
+            }
         }
     };
 };
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false>
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false,bool RowwiseB=false>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
-    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>::Args args) {
-    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>;using Shared=typename CF::Shared;
+    const __grid_constant__ typename MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB>::Args args) {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB>;using Shared=typename CF::Shared;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid(),lane=threadIdx.x%32;
@@ -128,8 +140,10 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
 #pragma unroll
                 for(int i=0;i<C/16;i++) {
 #pragma unroll
-                    for(int kk=0;kk<CF::SC;kk++)
-                        bs.data[i][kk]=__shfl_sync(0xffffffff,next.b,(i/2)*CF::SC+kk);
+                    for(int kk=0;kk<CF::SC;kk++) {
+                        if constexpr(RowwiseB)bs.data[i][kk]=next.b[i*CF::SC+kk];
+                        else bs.data[i][kk]=__shfl_sync(0xffffffff,next.b[0],(i/2)*CF::SC+kk);
+                    }
                 }
                 // Issue next-stage scale loads before this stage's QMMA.
                 next.load(args,mr,nc,k+1,lane);
@@ -213,8 +227,8 @@ struct MXPlanBase {
     virtual void info(int*)=0;
     virtual void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs,void*l=nullptr)=0;
 };
-template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false> struct MXPlan:MXPlanBase {
-    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>;typename CF::Args args;int grid,regs;
+template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false,bool RowwiseB=false> struct MXPlan:MXPlanBase {
+    using CF=MXConfig<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB>;typename CF::Args args;int grid,regs;
     static auto lse_args(void *l,float softcap) {
         if constexpr(SaveLSE)return typename CF::LSEArgs{static_cast<float*>(l),softcap};
         else return typename CF::NoQuantizedArgs{};
@@ -248,12 +262,12 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
             throw std::runtime_error("K/N must align to TMA swizzle panels");
         int dev;mx_check(cudaGetDevice(&dev));cudaDeviceProp prop;mx_check(cudaGetDeviceProperties(&prop,dev));
         grid=std::min(args.total,sms>0?std::min(sms,prop.multiProcessorCount):prop.multiProcessorCount);
-        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
-        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap>));regs=attr.numRegs;
+        mx_check(cudaFuncSetAttribute(persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB>,cudaFuncAttributeMaxDynamicSharedMemorySize,CF::smem));
+        cudaFuncAttributes attr;mx_check(cudaFuncGetAttributes(&attr,persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB>));regs=attr.numRegs;
         if(regs<168 || attr.localSizeBytes)throw std::runtime_error("Unexpected register pool or local memory");
     }
     void launch(cudaStream_t stream) override {
-        persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
+        persistent_mxfp8<R,C,BK,S,SaveQ,OnlyQ,SaveLSE,Softcap,RowwiseB><<<grid,384,CF::smem,stream>>>(args);mx_check(cudaGetLastError());
     }
     void info(int *d) override {d[0]=R;d[1]=C;d[2]=BK;d[3]=S;d[4]=CF::smem;d[5]=regs;d[6]=grid;}
     void rebind(void*a,void*b,void*as,void*bs,void*o,void*q,void*qs,void*l=nullptr) override {
@@ -324,6 +338,22 @@ extern "C" void *tk_mx_create_lse_softcap(void *a,void *b,void *as,void *bs,void
 #define CFG(I,R,C,K,S) case I: \
         if(softcap>0.f)return new MXPlan<R,C,K,S,false,false,true,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l,softcap); \
         return new MXPlan<R,C,K,S,false,false,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l)
+        switch(config) {
+#include "mxfp8_lse_configs.inc"
+            default:throw std::runtime_error("Invalid LSE configuration");
+        }
+#undef CFG
+    }catch(const std::exception &e){mx_error=e.what();return nullptr;}
+}
+extern "C" void *tk_mx_create_lse_rowwise(void *a,void *b,void *as,void *bs,void *o,
+    void *l,int m,int n,int k,int config,int sms,int g,float softcap) {
+    using namespace fp8gemm;
+    try {
+        if(!a||!b||!as||!bs||!o||!l||m<=0||n<=0||k<=0||g<1||!std::isfinite(softcap)||softcap<0.f)
+            throw std::runtime_error("Invalid arguments");
+#define CFG(I,R,C,K,S) case I: \
+        if(softcap>0.f)return new MXPlan<R,C,K,S,false,false,true,true,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l,softcap); \
+        return new MXPlan<R,C,K,S,false,false,true,false,true>(a,b,as,bs,o,m,n,k,sms,g,nullptr,nullptr,l)
         switch(config) {
 #include "mxfp8_lse_configs.inc"
             default:throw std::runtime_error("Invalid LSE configuration");

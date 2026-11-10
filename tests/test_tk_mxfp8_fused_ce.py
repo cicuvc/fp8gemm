@@ -5,10 +5,11 @@ import torch
 import torch.nn.functional as F
 
 from mxfp8._core import quantize_weight
+from mxfp8 import quantize_weight_rowwise
+from tests.mxfp8_reference import rowwise_logits
 from mxfp8._impl.ce import CEPlan, merge_lse
 from mxfp8._kernels.gemm import Library as GemmLibrary
 from mxfp8._kernels.lse import Library as LSELibrary, CONFIGS
-from mxfp8._kernels.dgrad import Library as DgradLibrary
 from mxfp8._kernels.wgrad import Library as WgradLibrary
 from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
@@ -88,8 +89,8 @@ def test_ce_dual_quantization_matches_cuda(m, v, uniform):
 
 
 def component_reference(x, w, y, chunk_size, configs=(8, 12, 12), ignore_index=-100):
-    """Independent chain: plain GEMM -> PyTorch CE math -> CUDA quantizer."""
-    wq, ws = quantize_weight(w.float())
+    """Independent chain: dequantized FP32 GEMM -> PyTorch CE -> mixed backward."""
+    wq, ws = quantize_weight_rowwise(w.float())
     dx = torch.empty_like(x)
     dw = torch.zeros_like(w, dtype=torch.float32)
     losses = []
@@ -97,7 +98,7 @@ def component_reference(x, w, y, chunk_size, configs=(8, 12, 12), ignore_index=-
         end = min(start + chunk_size, len(x))
         xq = SiluBwdQuantizeLibrary().plan_direct(x[start:end])
         xq()
-        z = GemmLibrary().plan(xq.row_fp8, wq, xq.row_scale, ws, config=configs[0])()
+        z = rowwise_logits(xq.row_fp8, wq, xq.row_scale, ws)
         targets = y[start:end]
         valid = targets != ignore_index
         losses.append(F.cross_entropy(z.float(), targets, reduction="sum", ignore_index=ignore_index))
@@ -106,7 +107,7 @@ def component_reference(x, w, y, chunk_size, configs=(8, 12, 12), ignore_index=-
         g[~valid] = 0
         gq = SiluBwdQuantizeLibrary().plan_direct(g.bfloat16(), transpose=True)
         gq()
-        dx[start:end] = DgradLibrary().plan(gq.row_fp8, wq, gq.row_scale, ws, config=configs[1])()
+        dx[start:end] = g.bfloat16() @ w.bfloat16()
         dw.add_(WgradLibrary().plan(gq.column_fp8, xq.column_fp8, gq.column_scale, xq.column_scale, config=configs[2])())
     return torch.stack(losses).sum(), dx, dw.to(w.dtype)
 
@@ -136,7 +137,7 @@ def test_chunked_loss_and_gradients(m, h, v, chunk, configs, dtype):
             torch.testing.assert_close(actual, expected * scale, atol=0, rtol=0)
     # Workspaces don't retain input activations after forward.
     for state in criterion._states.values():
-        assert state.xq.x is None and not state.gemm.refs and not state.dx.refs
+        assert state.xq.x is None and not state.gemm.refs and state.dx.dtype == torch.bfloat16
 
 
 def test_bf16_reference_accuracy_and_tied_weight():
@@ -162,7 +163,7 @@ def test_bf16_reference_accuracy_and_tied_weight():
 def test_cuda_graph_replay_with_new_inputs_and_weight_cache(ignore_index):
     x, w, y = inputs(137, 128, 256)
     x.requires_grad_(); w.requires_grad_()
-    wq, ws = quantize_weight(w.detach())
+    wq, ws = quantize_weight_rowwise(w.detach())
     kwargs = {} if ignore_index is None else {"ignore_index": ignore_index}
     criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, **kwargs)
     def step():
@@ -188,7 +189,7 @@ def test_cuda_graph_replay_with_new_inputs_and_weight_cache(ignore_index):
                 else:
                     y[::3] = ignore_index
             w.add_(.001)
-            new_q, new_s = quantize_weight(w.detach())
+            new_q, new_s = quantize_weight_rowwise(w.detach())
             wq.copy_(new_q); ws.copy_(new_s)
         expected = step()
         graph.replay()

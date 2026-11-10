@@ -4,6 +4,8 @@ Build with ``python -m mxfp8._kernels.lse`` in the CUDA environment.
 The limited configuration IDs match tk_mxfp8_gemm; partial LSE is [M,ceil(V/C)].
 softcap=s transforms logits in FP32 for LSE, while retaining raw BF16 output
 for the CE chain rule. None disables the transform. Plans fix s at creation.
+rowwise_weight=True accepts uint8 scales [V,H/32], one per embedding/H32;
+the default retains the blockwise [ceil(V/32),H/32] contract.
 """
 
 import ctypes as ct
@@ -60,6 +62,10 @@ class Library:
             [ct.c_void_p] * 6 + [ct.c_int] * 6 + [ct.c_float]
         )
         self.lib.tk_mx_create_lse_softcap.restype = ct.c_void_p
+        self.lib.tk_mx_create_lse_rowwise.argtypes = (
+            [ct.c_void_p] * 6 + [ct.c_int] * 6 + [ct.c_float]
+        )
+        self.lib.tk_mx_create_lse_rowwise.restype = ct.c_void_p
         self.lib.tk_mx_rebind_lse.argtypes = [ct.c_void_p] * 7
         self.lib.tk_mx_rebind_lse.restype = ct.c_int
         self.lib.tk_mx_launch.argtypes = [ct.c_void_p] * 2
@@ -79,16 +85,43 @@ class Library:
         partial_lse=None,
         raster_group=13,
         softcap=None,
+        rowwise_weight=False,
     ):
-        return Plan(self, x, w, xs, ws, config, out, partial_lse, raster_group, softcap)
+        return Plan(
+            self,
+            x,
+            w,
+            xs,
+            ws,
+            config,
+            out,
+            partial_lse,
+            raster_group,
+            softcap,
+            rowwise_weight,
+        )
 
 
 class Plan:
     def __init__(
-        self, owner, x, w, xs, ws, config, out, partial_lse, raster_group, softcap=None
+        self,
+        owner,
+        x,
+        w,
+        xs,
+        ws,
+        config,
+        out,
+        partial_lse,
+        raster_group,
+        softcap=None,
+        rowwise_weight=False,
     ):
         self.handle = None
         self.softcap = _validate_softcap(softcap)
+        if type(rowwise_weight) is not bool:
+            raise ValueError("rowwise_weight must be a bool")
+        self.rowwise_weight = rowwise_weight
         if type(config) is not int or config not in CONFIGS:
             raise ValueError("Invalid LSE config")
         if type(raster_group) is not int or not 0 < raster_group < 2**31:
@@ -112,7 +145,12 @@ class Plan:
             )
         self._validate(x, w, xs, ws, out, partial_lse)
         with torch.cuda.device(x.device):
-            self.handle = owner.lib.tk_mx_create_lse_softcap(
+            create = (
+                owner.lib.tk_mx_create_lse_rowwise
+                if rowwise_weight
+                else owner.lib.tk_mx_create_lse_softcap
+            )
+            self.handle = create(
                 *[t.data_ptr() for t in (x, w, xs, ws, out, partial_lse)],
                 self.m,
                 self.v,
@@ -132,7 +170,7 @@ class Plan:
             (self.m, self.h),
             (self.v, self.h),
             ((self.h + 127) // 128, (self.m + 15) // 16 * 16),
-            ((self.v + 31) // 32, self.h // 32),
+            (self.v if self.rowwise_weight else (self.v + 31) // 32, self.h // 32),
             (self.m, self.v),
             (self.m, self.parts),
         )

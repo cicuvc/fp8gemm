@@ -163,7 +163,7 @@ _GROUPS = {
         "swiglu",
         "swiglu_dgrad",
     ),
-    "loss": ("quantize", "silu", "gemm", "lse", "dgrad", "wgrad"),
+    "loss": ("silu", "lse", "wgrad"),
 }
 _EXTENSIONS = (
     "quantize",

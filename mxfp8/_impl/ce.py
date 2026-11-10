@@ -2,8 +2,9 @@
 
 Losses and dZ are unnormalized; labels must be valid vocabulary indices or
 ignore_index. Ignored rows have zero loss and zero gradients in both directions.
-No BF16 dZ tensor is materialized. Quantization rounds dZ to BF16 in registers
-and follows cuda/mxfp8_quantize.cuh (E8M0 exponent offset 7).
+The default dual-MXFP8 mode rounds dZ to BF16 in registers. bf16_dgrad=True
+instead writes BF16 dZ for dX and only quantizes the column direction for dW.
+Quantization follows cuda/mxfp8_quantize.cuh (E8M0 exponent offset 7).
 With softcap, logits remain raw BF16; partial LSE must already describe the
 FP32 transformed logits. The chain rule is applied before quantization.
 """
@@ -87,8 +88,12 @@ def _ce_dual_quantize(
     IGNORE_INDEX: tl.constexpr,
     HAS_WEIGHT: tl.constexpr,
     SOFTCAP: tl.constexpr,
+    BF16_DGRAD: tl.constexpr,
 ):
     # Each program owns one 32x32 tile: complete groups in both directions.
+    # In BF16 mode Row may alias Z exactly. All logits needed by this program
+    # are loaded into registers before its stores; no program reads another
+    # program's tile. LSE/loss/NLL must be computed before this launch.
     tm = tl.program_id(0).to(tl.int64)
     tv = tl.program_id(1).to(tl.int64)
     rows = tm * 32 + tl.arange(0, 32)
@@ -114,11 +119,14 @@ def _ce_dual_quantize(
     # Match the existing BF16 -> MXFP8 quantizer, including its rounding point.
     g = g.to(tl.bfloat16).to(tl.float32)
     exponent = (g.to(tl.int32, bitcast=True) >> 23) & 255
-    er = tl.maximum(tl.max(exponent, 1), 7) - 7
     ec = tl.maximum(tl.max(exponent, 0), 7) - 7
-    rr = ((254 - er) << 23).to(tl.float32, bitcast=True)
     rc = ((254 - ec) << 23).to(tl.float32, bitcast=True)
-    qr = (g * rr[:, None]).to(tl.bfloat16).to(tl.float8e4nv)
+    if BF16_DGRAD:
+        qr = g.to(tl.bfloat16)
+    else:
+        er = tl.maximum(tl.max(exponent, 1), 7) - 7
+        rr = ((254 - er) << 23).to(tl.float32, bitcast=True)
+        qr = (g * rr[:, None]).to(tl.bfloat16).to(tl.float8e4nv)
     qc = (g * rc[None, :]).to(tl.bfloat16).to(tl.float8e4nv)
     tl.store(
         Row + rows[:, None] * V + cols[None, :],
@@ -127,9 +135,12 @@ def _ce_dual_quantize(
     )
     tl.store(Col + cols[None, :] * MP + rows[:, None], qc, cols[None, :] < V)
     # Disjoint byte stores, never an int32 read-modify-write across programs.
-    tl.store(
-        RowScale + (tv // 4 * MP16 + rows) * 4 + tv % 4, er.to(tl.uint8), rows < MP16
-    )
+    if not BF16_DGRAD:
+        tl.store(
+            RowScale + (tv // 4 * MP16 + rows) * 4 + tv % 4,
+            er.to(tl.uint8),
+            rows < MP16,
+        )
     tl.store(
         ColScale + (tm // 4 * VP16 + cols) * 4 + tm % 4, ec.to(tl.uint8), cols < VP16
     )
@@ -246,20 +257,45 @@ def _validate_row_weight(row_weight, m, device):
 
 
 class CEPlan:
-    """Reusable quantization workspace compatible with CUDA dgrad/wgrad plans."""
+    """Reusable dZ workspace.
 
-    def __init__(self, m, v, device):
+    Default: row/column MXFP8 for CUDA dgrad/wgrad. bf16_dgrad=True instead
+    allocates row_bf16 and column MXFP8 only; row_fp8/row_scale are None.
+    With inplace=True (BF16 mode only), no row buffer is allocated: each call
+    overwrites logits with BF16 dZ and binds row_bf16 to that tensor. Compute
+    loss/LSE/NLL first; logits are no longer available after this call.
+    __call__ returns (row, row_scale, column_fp8, column_scale) in either mode.
+    """
+
+    def __init__(self, m, v, device, *, bf16_dgrad=False, inplace=False):
         if m <= 0 or v <= 0:
             raise ValueError("Positive dimensions required")
+        if type(inplace) is not bool or (inplace and not bf16_dgrad):
+            raise ValueError("inplace requires bf16_dgrad=True and must be a bool")
         self.m, self.v = m, v
+        self.bf16_dgrad = bf16_dgrad
+        self.inplace = inplace
         self.mp = triton.cdiv(m, 128) * 128
         self.mp16, self.vp16 = triton.cdiv(m, 16) * 16, triton.cdiv(v, 16) * 16
-        self.row_fp8 = torch.empty((m, v), device=device, dtype=torch.float8_e4m3fn)
+        self.row_bf16 = (
+            torch.empty((m, v), device=device, dtype=torch.bfloat16)
+            if bf16_dgrad and not inplace
+            else None
+        )
+        self.row_fp8 = (
+            None
+            if bf16_dgrad
+            else torch.empty((m, v), device=device, dtype=torch.float8_e4m3fn)
+        )
         self.column_fp8 = torch.empty(
             (v, self.mp), device=device, dtype=torch.float8_e4m3fn
         )
-        self.row_scale = torch.zeros(
-            (triton.cdiv(v, 128), self.mp16), device=device, dtype=torch.int32
+        self.row_scale = (
+            None
+            if bf16_dgrad
+            else torch.zeros(
+                (triton.cdiv(v, 128), self.mp16), device=device, dtype=torch.int32
+            )
         )
         self.column_scale = torch.zeros(
             (self.mp // 128, self.vp16), device=device, dtype=torch.int32
@@ -271,7 +307,7 @@ class CEPlan:
         if (
             logits.shape != (self.m, self.v)
             or logits.dtype != torch.bfloat16
-            or logits.device != self.row_fp8.device
+            or logits.device != self.column_fp8.device
             or not logits.is_contiguous()
         ):
             raise ValueError("Expected contiguous BF16 logits matching the CE plan")
@@ -286,14 +322,16 @@ class CEPlan:
         _validate_row_weight(row_weight, self.m, logits.device)
         _validate_ignore_index(ignore_index)
         softcap = _validate_softcap(softcap)
+        if self.inplace:
+            self.row_bf16 = logits
         with torch.cuda.device(logits.device):
             _ce_dual_quantize[(self.mp // 32, triton.cdiv(self.v, 32))](
                 logits,
                 lse,
                 target,
                 row_weight,
-                self.row_fp8,
-                self.row_scale.view(torch.uint8),
+                self.row_bf16 if self.bf16_dgrad else self.row_fp8,
+                None if self.bf16_dgrad else self.row_scale.view(torch.uint8),
                 self.column_fp8,
                 self.column_scale.view(torch.uint8),
                 self.m,
@@ -304,7 +342,9 @@ class CEPlan:
                 ignore_index,
                 row_weight is not None,
                 softcap,
+                self.bf16_dgrad,
                 num_warps=4,
                 enable_fp_fusion=False,
             )
-        return self.row_fp8, self.row_scale, self.column_fp8, self.column_scale
+        row = self.row_bf16 if self.bf16_dgrad else self.row_fp8
+        return row, self.row_scale, self.column_fp8, self.column_scale

@@ -5,10 +5,9 @@ import torch
 import torch.nn.functional as F
 
 from mxfp8._impl.balance import document_weights, reduce_balanced_loss
-from mxfp8._core import quantize_weight
+from mxfp8 import quantize_weight_rowwise
+from tests.mxfp8_reference import rowwise_logits
 from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
-from mxfp8._kernels.gemm import Library as GemmLibrary
-from mxfp8._kernels.dgrad import Library as DgradLibrary
 from mxfp8._kernels.wgrad import Library as WgradLibrary
 from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_fused_ce import inputs
@@ -69,14 +68,14 @@ def test_more_documents_than_tokens_and_multistage_document_count():
 
 def component_reference(x, w, y, weights, denominator, chunk_size):
     """Plain GEMM + PyTorch weighted CE + existing CUDA dual quantizer."""
-    wq, ws = quantize_weight(w.float())
+    wq, ws = quantize_weight_rowwise(w.float())
     dx = torch.empty_like(x)
     dw = torch.zeros_like(w, dtype=torch.float32)
     losses = []
     for start in range(0, len(x), chunk_size):
         end = min(start + chunk_size, len(x))
         xq = SiluBwdQuantizeLibrary().plan_direct(x[start:end]); xq()
-        z = GemmLibrary().plan(xq.row_fp8, wq, xq.row_scale, ws, config=8)()
+        z = rowwise_logits(xq.row_fp8, wq, xq.row_scale, ws)
         labels = y[start:end]
         valid = labels != -100
         row_weight = weights[start:end]
@@ -86,7 +85,7 @@ def component_reference(x, w, y, weights, denominator, chunk_size):
         g[~valid] = 0
         g = (g * row_weight[:, None]).bfloat16()
         gq = SiluBwdQuantizeLibrary().plan_direct(g, transpose=True); gq()
-        dx[start:end] = DgradLibrary().plan(gq.row_fp8, wq, gq.row_scale, ws, config=12)()
+        dx[start:end] = g.bfloat16() @ w.bfloat16()
         dw.add_(WgradLibrary().plan(gq.column_fp8, xq.column_fp8, gq.column_scale, xq.column_scale, config=12)())
     inv = denominator.clamp_min(1).float().reciprocal()
     return torch.stack(losses).sum() * inv, dx * inv, dw.to(w.dtype) * inv
@@ -157,7 +156,7 @@ def test_balanced_bf16_accuracy(mode):
 def test_balance_graph_replay_with_changed_boundaries(mode):
     x, w, y = inputs(257, 128, 256)
     x.requires_grad_(); w.requires_grad_()
-    wq, ws = quantize_weight(w.detach())
+    wq, ws = quantize_weight_rowwise(w.detach())
     cu = torch.tensor([0, 1, 31, 257], device="cuda", dtype=torch.int32)
     criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, balance=mode)
     def step():

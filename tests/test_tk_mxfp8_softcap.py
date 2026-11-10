@@ -5,10 +5,11 @@ import torch
 import torch.nn.functional as F
 
 from mxfp8._impl.ce import CEPlan, merge_lse
+from mxfp8 import quantize_weight_rowwise
+from tests.mxfp8_reference import rowwise_logits
 from mxfp8._core import quantize_weight
 from mxfp8._kernels.lse import Library as LSELibrary, CONFIGS
 from mxfp8._kernels.gemm import Library as GemmLibrary
-from mxfp8._kernels.dgrad import Library as DgradLibrary
 from mxfp8._kernels.wgrad import Library as WgradLibrary
 from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
 from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
@@ -94,20 +95,20 @@ def test_softcap_ce_dual_quantization(softcap, ignore_index):
 
 
 def component_reference(x, w, y, softcap, weights, denominator):
-    wq, ws = quantize_weight(w.float())
+    wq, ws = quantize_weight_rowwise(w.float())
     dx, dw = torch.empty_like(x), torch.zeros_like(w, dtype=torch.float32)
     losses = []
     for start in range(0, len(x), 128):
         end = min(start + 128, len(x))
         xq = SiluBwdQuantizeLibrary().plan_direct(x[start:end]); xq()
-        z = GemmLibrary().plan(xq.row_fp8, wq, xq.row_scale, ws, config=8)()
+        z = rowwise_logits(xq.row_fp8, wq, xq.row_scale, ws)
         raw = z.float().requires_grad_()
         capped = softcap * torch.tanh(raw / softcap)
         loss = (F.cross_entropy(capped, y[start:end], reduction="none") * weights[start:end]).sum()
         g, = torch.autograd.grad(loss, raw)
         losses.append(loss.detach())
         gq = SiluBwdQuantizeLibrary().plan_direct(g.bfloat16(), transpose=True); gq()
-        dx[start:end] = DgradLibrary().plan(gq.row_fp8, wq, gq.row_scale, ws, config=12)()
+        dx[start:end] = g.bfloat16() @ w.bfloat16()
         dw.add_(WgradLibrary().plan(gq.column_fp8, xq.column_fp8, gq.column_scale, xq.column_scale, config=12)())
     inv = denominator.clamp_min(1).float().reciprocal()
     return torch.stack(losses).sum() * inv, dx * inv, dw.to(w.dtype) * inv
@@ -149,7 +150,7 @@ def test_softcap_chunked_balanced_gradients(balance, dtype):
 def test_softcap_graph_replay_and_all_ignored(balance):
     x, w, y = inputs(137, 128, 256)
     x.requires_grad_(); w.requires_grad_()
-    wq, ws = quantize_weight(w.detach())
+    wq, ws = quantize_weight_rowwise(w.detach())
     cu = torch.tensor([0, 31, 137], device="cuda", dtype=torch.int32)
     criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, balance=balance, softcap=1.3)
     def step():

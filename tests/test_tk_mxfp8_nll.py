@@ -5,9 +5,9 @@ import torch
 import torch.nn.functional as F
 
 import mxfp8._impl.fused_ce as ce_module
-from mxfp8._core import quantize_weight
+from mxfp8 import quantize_weight_rowwise
+from tests.mxfp8_reference import rowwise_logits
 from mxfp8._impl.fused_ce import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
-from mxfp8._kernels.gemm import Library as GemmLibrary
 from mxfp8._kernels.silu import SiluBwdQuantizeLibrary
 from tests.test_tk_mxfp8_fused_ce import inputs
 from tests.test_tk_mxfp8_balance import reference_weights
@@ -19,12 +19,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def reference_nll(x, w, y, softcap, ignore_index):
-    wq, ws = quantize_weight(w.float())
+    wq, ws = quantize_weight_rowwise(w.float())
     losses = []
     for start in range(0, len(x), 128):
         xq = SiluBwdQuantizeLibrary().plan_direct(x[start:start + 128])
         xq()
-        z = GemmLibrary().plan(xq.row_fp8, wq, xq.row_scale, ws, config=8)().float()
+        z = rowwise_logits(xq.row_fp8, wq, xq.row_scale, ws).float()
         if softcap is not None:
             z = softcap * torch.tanh(z / softcap)
         losses.append(F.cross_entropy(z, y[start:start + 128], reduction="none",
@@ -68,7 +68,7 @@ def test_evaluation_does_not_prepare_or_compute_gradients(monkeypatch, mode, ret
     x, w, y = inputs(137, 128, 256)
     def forbidden(*args, **kwargs):
         raise AssertionError("evaluation must not prepare backward")
-    for name in ("DgradLibrary", "WgradLibrary", "CEPlan"):
+    for name in ("WgradLibrary", "CEPlan"):
         monkeypatch.setattr(ce_module, name, forbidden)
     criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128)
     if mode != "no_requires_grad":
@@ -78,7 +78,7 @@ def test_evaluation_does_not_prepare_or_compute_gradients(monkeypatch, mode, ret
         result = criterion(x, y, w, return_nll=return_nll)
     loss = result[0] if return_nll else result
     assert not loss.requires_grad
-    assert criterion._dgrad is None and criterion._wgrad is None
+    assert criterion._wgrad is None
     for state in criterion._states.values():
         assert state.ce is None and state.dx is None and state.dw is None
         assert state.xq.x is None and not state.gemm.refs
@@ -114,7 +114,7 @@ def test_auxiliary_nll_preserves_scalar_backward_and_eval_train_switch(balance):
 def test_nll_evaluation_cuda_graph_replay(balance):
     x, w, y = inputs(137, 128, 320)
     x.requires_grad_(); w.requires_grad_()
-    wq, ws = quantize_weight(w.detach())
+    wq, ws = quantize_weight_rowwise(w.detach())
     cu = torch.tensor([0, 0, 32, 137], device="cuda", dtype=torch.int32)
     criterion = MXFP8FusedLinearCrossEntropy(chunk_size=128, balance=balance, softcap=.7)
     @torch.no_grad()
@@ -133,7 +133,7 @@ def test_nll_evaluation_cuda_graph_replay(balance):
         with torch.no_grad():
             x.add_(.25)
             w.add_(.01)
-            q, s = quantize_weight(w.detach())
+            q, s = quantize_weight_rowwise(w.detach())
             wq.copy_(q); ws.copy_(s)
             y.copy_(torch.arange(len(y), device=y.device) % w.shape[0])
             y[::3] = -100
