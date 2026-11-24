@@ -180,6 +180,11 @@ the MXFP8 modules: `gate_weight`, `up_weight`, and `down_proj.master_weight`.
 
 All GEMMs use the existing TMA ring pipeline, shared-memory loader, and unit
 E8M0 `QMMA.SF` instructions, with external FP32 scaling after each K128 block.
+The producer prefetches FP32 scales before waiting for its input slot. It
+precombines row/block scale products; dW transfers row scales for both sides.
+Consumers read the shared metadata before releasing the slot. The compact
+metadata preserves all persistent tile configurations and fits within 101376
+bytes, including fused dX.
 Quantization uses `scale = max(abs(block))/448` (1 for an all-zero block,
 clamped to the smallest normal FP32 value otherwise). Inputs should be finite.
 Gate/up projections are saved as BF16; SiLU uses those values in FP32 and
@@ -202,9 +207,33 @@ Warm up forward **and backward** for each shape on the capture stream before
 capture. Workspaces preserve independent live forwards and retained autograd
 graphs; returned outputs and gradients are not overwritten by later calls.
 
+K128 FP32-scale modules and plans also support optional Stream-K:
+
+```python
+mlp = FP8SwiGLU(1024, 2944, 1024, device="cuda", streamk="atomic")
+# Fixed-order partial reduction:
+mlp = FP8SwiGLU(1024, 2944, 1024, device="cuda", streamk="deterministic")
+# Prequantized low-level GEMM, with optional sms= and tail_waves=:
+plan = FP8GemmPlan(a, b, sfA, sfB, streamk="atomic")
+```
+
+The default `streamk=None` keeps persistent execution. Unlike the MXFP8
+adapter's auto policy, these constructor options explicitly enable Stream-K
+for every GEMM in the module, including down forward. Splits are K128-aligned;
+external FP32 scaling happens before partial reduction. Atomic mode uses TMA
+reduce-add, with clear/main/fixup captured together; deterministic mode uses
+exclusive partials and increasing-K fixup. FP32 dW output and the BF16-rounded
+gate/up activation contract are preserved. Summation order can change results.
+Each live autograd workspace owns its scratch. Stream-K uses C=64; fused dX
+uses one input stage to leave space for FP32 partial TMA stores, while the other
+variants use two. No configuration changes apply to the default persistent
+path. Benefits depend on the shape and must include clear/fixup costs.
+
 Run `python benchmarks/bench_fp8_training.py` for forward and forward+backward
 CUDA Graph timings including activation/gradient quantization, excluding
-optimizer updates and weight-cache refresh.
+optimizer updates and weight-cache refresh. The benchmark reports persistent,
+atomic and deterministic modes separately; `--reductions persistent atomic`
+selects a subset.
 
 ## Execution and optimizer integration
 

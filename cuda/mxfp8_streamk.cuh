@@ -17,7 +17,7 @@ template<int R,int C,int Components=1> struct Params {
     const Work *work;
     const int *offsets;
 };
-template<int R,int C,int Components,class RT>
+template<int R,int C,int Components,class RT,bool Atomic=atomic>
 __device__ __forceinline__ void store_partial(typename Params<R,C,Components>::Partial &shared,
     const RT &accum,const Params<R,C,Components> &args,int slot,int component,int group,bool writer) {
 #pragma unroll
@@ -36,7 +36,7 @@ __device__ __forceinline__ void store_partial(typename Params<R,C,Components>::P
         kt::warpgroup::sync(group+1);
         if(writer) {
             kt::coord<> dst={0,0,(slot*Components+component)*(8*R)+group*4*R,panel*(C/2)};
-            if constexpr(atomic)kt::tma::store_add_async(args.partial,shared,dst);
+            if constexpr(Atomic)kt::tma::store_add_async(args.partial,shared,dst);
             else kt::tma::store_async(args.partial,shared,dst);
             kt::tma::store_commit_group();
         }

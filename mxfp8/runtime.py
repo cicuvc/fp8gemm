@@ -54,6 +54,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             (
                 _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_fp8_gemm.cu"),
+                _path("cuda/mxfp8_streamk.cuh"),
                 _path("cuda/fp8_configs.inc"),
                 _path("cuda/fp8_shared_load.cuh"),
                 _path("cuda/tma_ring_pipe.cuh"),

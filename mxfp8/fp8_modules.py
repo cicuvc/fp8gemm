@@ -24,12 +24,12 @@ def _input(x, weight):
         raise ValueError("Expected contiguous CUDA BF16 input[M,K] with positive M")
 
 
-def _gemm(a, b, *, transpose_b=False, wgrad=False):
+def _gemm(a, b, *, transpose_b=False, wgrad=False, streamk=None):
     if wgrad:
         return FP8GemmPlan(a.col, b.col, a.col_scale, b.col_scale,
-                           dtype=torch.float32, b_scale_mode="row")
+                           dtype=torch.float32, b_scale_mode="row", streamk=streamk)
     return FP8GemmPlan(a.row, b.col if transpose_b else b.row, a.row_scale,
-                       b.col_scale if transpose_b else b.row_scale)
+                       b.col_scale if transpose_b else b.row_scale, streamk=streamk)
 
 
 def _run(plan):
@@ -93,21 +93,21 @@ class _CacheModule(nn.Module):
 
     def _lease(self, x, factory):
         self._sync_if_needed()
-        key = (tuple(x.shape), torch.cuda.current_stream(x.device).cuda_stream)
+        key = (tuple(x.shape), torch.cuda.current_stream(x.device).cuda_stream, self.streamk)
         pool = self._pools.setdefault(key, [])
-        return _Lease(pool, pool.pop() if pool else factory(x, self._quantized))
+        return _Lease(pool, pool.pop() if pool else factory(x, self._quantized, self.streamk))
 
 
 class _LinearState:
-    def __init__(self, x, weights):
+    def __init__(self, x, weights, streamk):
         w, = weights
         m, k = x.shape
         n = w.row.shape[0]
         self.x = DualQuantized(m, k, x.device)
         self.dy = DualQuantized(m, n, x.device)
-        self.forward = _gemm(self.x, w)
-        self.dx = _gemm(self.dy, w, transpose_b=True)
-        self.dw = _gemm(self.dy, self.x, wgrad=True)
+        self.forward = _gemm(self.x, w, streamk=streamk)
+        self.dx = _gemm(self.dy, w, transpose_b=True, streamk=streamk)
+        self.dw = _gemm(self.dy, self.x, wgrad=True, streamk=streamk)
 
 
 class _LinearFunction(torch.autograd.Function):
@@ -136,10 +136,15 @@ class FP8Linear(_CacheModule):
     Activation/gradient quantization is independently rowwise and columnwise
     at granularity 128; weights use 128x128 blocks. Backward uses quantized
     operands as a first-order training approximation (no double backward).
+    streamk=None uses persistent GEMMs; "atomic"/"deterministic" enables
+    Stream-K for all three GEMMs, with per-workspace partial storage.
     """
 
-    def __init__(self, in_features, out_features, *, device=None):
+    def __init__(self, in_features, out_features, *, device=None, streamk=None):
         super().__init__()
+        if streamk not in (None, "atomic", "deterministic"):
+            raise ValueError("streamk must be None, 'atomic', or 'deterministic'")
+        self.streamk = streamk
         _features(in_features, out_features)
         device = require_sm120(device)
         ensure_extensions("fp8_gemm")
@@ -171,7 +176,7 @@ class FP8Linear(_CacheModule):
 
 
 class _SwiGLUState:
-    def __init__(self, x, weights):
+    def __init__(self, x, weights, streamk):
         wg, wu = weights
         m, k = x.shape
         h = wg.row.shape[0]
@@ -183,15 +188,15 @@ class _SwiGLUState:
         self.forward = _FP8DualPlan(
             self.x.row, wg.row, self.x.row_scale, wg.row_scale,
             a2=self.x.row, b2=wu.row, sa2=self.x.row_scale, sb2=wu.row_scale,
-            mode=1, out=torch.empty_like(self.gate), gate=self.gate, up=self.up,
+            mode=1, out=torch.empty_like(self.gate), gate=self.gate, up=self.up, streamk=streamk,
         )
         self.dx = _FP8DualPlan(
             self.dg.row, wg.col, self.dg.row_scale, wg.col_scale,
             a2=self.du.row, b2=wu.col, sa2=self.du.row_scale, sb2=wu.col_scale,
-            mode=2, out=torch.empty_like(x),
+            mode=2, out=torch.empty_like(x), streamk=streamk,
         )
-        self.dwg = _gemm(self.dg, self.x, wgrad=True)
-        self.dwu = _gemm(self.du, self.x, wgrad=True)
+        self.dwg = _gemm(self.dg, self.x, wgrad=True, streamk=streamk)
+        self.dwu = _gemm(self.du, self.x, wgrad=True, streamk=streamk)
 
 
 class _SwiGLUFunction(torch.autograd.Function):
@@ -222,10 +227,15 @@ class FP8SwiGLU(_CacheModule):
     projections are rounded to BF16 before SiLU; SiLU and its derivative are
     evaluated in FP32, then activations/gradients are rounded to BF16.
     All feature dimensions must be multiples of 128; M may be any positive size.
+    streamk=None preserves persistent routing. "atomic"/"deterministic" enables
+    all forward and backward Stream-K GEMMs, including the down projection.
     """
 
-    def __init__(self, in_features, hidden_features, out_features, *, device=None):
+    def __init__(self, in_features, hidden_features, out_features, *, device=None, streamk=None):
         super().__init__()
+        if streamk not in (None, "atomic", "deterministic"):
+            raise ValueError("streamk must be None, 'atomic', or 'deterministic'")
+        self.streamk = streamk
         _features(in_features, hidden_features, out_features)
         device = require_sm120(device)
         ensure_extensions("fp8_gemm")
@@ -235,7 +245,7 @@ class FP8SwiGLU(_CacheModule):
         self.gate_weight = nn.Parameter(torch.empty(hidden_features, in_features,
                                                      device=device, dtype=torch.float32))
         self.up_weight = nn.Parameter(torch.empty_like(self.gate_weight))
-        self.down_proj = FP8Linear(hidden_features, out_features, device=device)
+        self.down_proj = FP8Linear(hidden_features, out_features, device=device, streamk=streamk)
         self.reset_parameters()
 
     def _weights(self):

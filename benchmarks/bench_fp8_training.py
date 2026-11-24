@@ -72,21 +72,33 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shapes", nargs="+", default=["128,1024,2816,1024", "1024,1024,2816,1024",
                                                        "1024,2048,5632,2048"])
+    parser.add_argument("--reductions", nargs="+", choices=["persistent", "atomic", "deterministic"],
+                        default=["persistent", "atomic", "deterministic"])
     parser.add_argument("--output", type=Path, default=Path("runs/tk_fp8_gemm/ffn_benchmark.json"))
     args = parser.parse_args()
     torch.manual_seed(123)
     report = dict(gpu=torch.cuda.get_device_name(), results=[])
     for shape in args.shapes:
         m, k, h, n = map(int, shape.split(","))
-        fp8, bf16 = FP8SwiGLU(k, h, n), BF16SwiGLU(k, h, n)
+        layers = {"fp8_" + mode: FP8SwiGLU(k,h,n,streamk=None if mode == "persistent" else mode)
+                  for mode in args.reductions}
+        first = next(iter(layers.values()))
+        for layer in layers.values():
+            if layer is not first: layer.load_state_dict(first.state_dict())
+        bf16 = BF16SwiGLU(k,h,n)
+        with torch.no_grad():
+            bf16.gate.copy_(first.gate_weight)
+            bf16.up.copy_(first.up_weight)
+            bf16.down.copy_(first.down_proj.weight)
+        layers["bf16"] = bf16
         x = torch.randn(m, k, device="cuda", dtype=torch.bfloat16, requires_grad=True)
         result = dict(shape=[m, k, h, n])
-        for name, layer in [("fp8", fp8), ("bf16", bf16)]:
+        for name, layer in layers.items():
             result[name + "_forward_us"] = measure(layer, x, False)
             result[name + "_forward_backward_us"] = measure(layer, x, True)
         report["results"].append(result)
         print(json.dumps(result), flush=True)
-        del fp8, bf16, x
+        del layers, first, layer, bf16, x
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 
