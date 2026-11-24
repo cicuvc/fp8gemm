@@ -52,6 +52,59 @@ y = linear(x)
 - `quantize_weight`
 - `quantize_weight_rowwise`
 
+## FP8 forward GEMM with FP32 block scales
+
+`fp8_gemm` also provides a forward-only SM120 GEMM for prequantized E4M3
+operands with FP32 dequantization scales at granularity 128:
+
+| Argument | Shape | Dtype |
+| --- | --- | --- |
+| `a` | `[M,K]` | `torch.float8_e4m3fn` |
+| `b` | `[N,K]` | `torch.float8_e4m3fn` |
+| `sfA` | `[M,K//128]` | `torch.float32` |
+| `sfB` | `[N//128,K//128]` | `torch.float32` |
+| output | `[M,N]` | BF16 by default; optional FP32 |
+
+All tensors must be contiguous on the same SM120 GPU. M is any positive
+integer; N and K must be positive multiples of 128. Scales multiply the
+stored FP8 values; they are not inverse scales. For each K128 block `g`,
+the kernel computes an FP32 partial dot product, multiplies it by
+`sfA[m,g] * sfB[n//128,g]`, and adds it to a separate FP32 accumulator.
+The result is `A_dequantized @ B_dequantized.T`, subject to floating-point
+rounding. FP32 scale values are used directly, without E8M0 conversion.
+The kernel computes the unscaled dot products with `QMMA.SF` and constant
+internal E8M0 scales of 127 (1.0), using the same ThunderKittens
+block-scaled MMA and shared-memory loader as the MXFP8 kernels.
+
+```python
+from mxfp8 import FP8GemmPlan, fp8_gemm
+
+# a, b, sfA, sfB are already quantized/prepared in the layouts above.
+y = fp8_gemm(a, b, sfA, sfB)
+y_fp32 = fp8_gemm(a, b, sfA, sfB, dtype=torch.float32)
+
+# Reuse descriptors/output for repeated execution or CUDA Graph capture.
+plan = FP8GemmPlan(a, b, sfA, sfB)
+y = plan()
+print(plan.info)
+```
+
+This API does not quantize inputs or implement backward; inputs requiring
+gradients are rejected. Construct and warm up plans before graph capture.
+Calls read current input/scale contents and overwrite the same output;
+keep tensor storage and metadata fixed and serialize calls to each plan.
+An optional `out=` tensor selects BF16 or FP32 output through its dtype.
+Build ahead of time with `mxfp8.build_extensions("fp8_gemm")`, or let the
+first plan build the extension. Four configurations cover N tiles of
+64/128 and 2/3 TMA stages, selected with `FP8GemmPlan(..., config=0..3)`.
+The default is config 0: a `128x64x128` CTA tile with two TMA stages.
+
+Run `python benchmarks/bench_fp8_gemm.py` for warm CUDA Graph timings of
+each configuration and a BF16 `torch.mm` latency baseline. Quantization
+and plan setup are excluded.
+
+## Execution and optimizer integration
+
 Modules own execution plans and workspaces for fixed shapes and should be
 called sequentially on a single CUDA stream. Warm up each new shape before
 CUDA Graph capture. When using a standard optimizer, call

@@ -29,6 +29,21 @@ def _path(*parts: str) -> Path:
 
 
 def _extension_spec(name: str) -> ExtensionSpec:
+    if name == "fp8_gemm":
+        from ._kernels import fp8_gemm
+
+        return ExtensionSpec(
+            name,
+            fp8_gemm.build,
+            (fp8_gemm.OUTPUT / "libfp8_gemm.so",),
+            (
+                _path("cuda/persistent_fp8_gemm.cu"),
+                _path("cuda/fp8_configs.inc"),
+                _path("cuda/fp8_shared_load.cuh"),
+                _path("cuda/tma_ring_pipe.cuh"),
+                *tuple(_path("third_party/thunderkittens/include").rglob("*.cuh")),
+            ),
+        )
     if name == "quantize":
         from ._kernels import weight_quantize
 
@@ -166,6 +181,7 @@ _GROUPS = {
     "loss": ("silu", "lse", "wgrad"),
 }
 _EXTENSIONS = (
+    "fp8_gemm",
     "quantize",
     "silu",
     "gemm",

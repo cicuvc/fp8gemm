@@ -2,15 +2,16 @@
 #include "kittens.cuh"
 
 namespace fp8gemm {
-// Complete FP8 shared tiles only. The actual allocation must honor ST's
-// 8*swizzle_bytes alignment, so the uniform base can stay outside the XOR.
+// Complete FP8 shared allocations; optionally read a slice starting at a K32
+// tile index. The caller must keep the slice within ST::cols. The allocation
+// must honor ST's 8*swizzle_bytes alignment, keeping the base outside the XOR.
 template<int GW, bool Swap, class RT, class ST>
-__device__ inline void load_fp8_factored(RT &dst, const ST &src) {
+__device__ inline void load_fp8_factored(RT &dst, const ST &src, int k32_start=0) {
     namespace kt = kittens;
     static_assert(sizeof(typename ST::dtype) == 1);
     static_assert(std::is_same_v<typename RT::layout, kt::ducks::rt_layout::row>);
     static_assert(ST::rows == ST::underlying_rows && ST::cols == ST::underlying_cols);
-    static_assert(ST::cols == RT::cols && ST::rows % (GW * RT::rows) == 0);
+    static_assert(ST::cols >= RT::cols && ST::rows % (GW * RT::rows) == 0);
     constexpr int SB = ST::swizzle_bytes;
     static_assert(alignof(ST) >= 8 * SB && ST::required_alignment >= 8 * SB);
     constexpr int panel_tiles = SB / RT::tile_size_col;
@@ -26,9 +27,10 @@ __device__ inline void load_fp8_factored(RT &dst, const ST &src) {
     for (int i = 0; i < RT::height; ++i) {
 #pragma unroll
         for (int j = 0; j < RT::width; ++j) {
-            uint32_t offset = lane_offset ^ ((j % panel_tiles) * RT::tile_size_col);
+            int col_tile = k32_start + j;
+            uint32_t offset = lane_offset ^ ((col_tile % panel_tiles) * RT::tile_size_col);
             uint32_t addr = shared_base + offset + i * RT::tile_size_row * SB
-                + (j / panel_tiles) * ST::rows * SB;
+                + (col_tile / panel_tiles) * ST::rows * SB;
             auto &d = dst.tiles[i][j].data;
             using U2 = typename kt::base_types::packing<typename ST::dtype>::packed_type;
             if constexpr (Swap) kt::move<U2>::ldsm4(d[0], d[2], d[1], d[3], addr);

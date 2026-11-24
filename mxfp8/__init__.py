@@ -1,5 +1,6 @@
 """Bias-free, SM120 MXFP8 training modules."""
 
+from ._kernels.fp8_gemm import FP8GemmPlan, fp8_gemm
 from .loss import MXFP8FusedLinearCrossEntropy, fused_linear_cross_entropy_loss
 from .modules import MXFP8DownProjection, MXFP8Linear, MXFP8MLP, MXFP8SwiGLU
 from .norm import MXFP8RMSNorm
@@ -15,6 +16,7 @@ from .runtime import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "FP8GemmPlan",
     "FusedAdamWMXFP8",
     "MXFP8DownProjection",
     "MXFP8FusedLinearCrossEntropy",
@@ -26,6 +28,7 @@ __all__ = [
     "build_extensions",
     "ensure_extensions",
     "extension_status",
+    "fp8_gemm",
     "fused_linear_cross_entropy_loss",
     "pack_a_scales",
     "quantize_weight",

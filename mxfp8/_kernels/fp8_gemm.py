@@ -1,0 +1,220 @@
+"""SM120 E4M3 GEMM with FP32 scales at K=128 granularity."""
+
+import ctypes as ct
+from pathlib import Path
+import subprocess
+import re
+
+import torch
+
+from .._core import FLAGS, ROOT, nvcc_path
+
+OUTPUT = ROOT / "runs/tk_fp8_gemm"
+CONFIGS = [
+    (128, int(m[1]), 128, int(m[2]))
+    for m in re.findall(
+        r"^CFG\((\d+),(\d+),(\d+)\);",
+        (ROOT / "cuda/fp8_configs.inc").read_text(),
+        re.M,
+    )
+]
+_library = None
+
+
+def build(output=OUTPUT):
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / "build.log").open("w") as log:
+        subprocess.run(
+            [
+                nvcc_path(),
+                *FLAGS,
+                "-Xptxas=-v",
+                "-shared",
+                "-Xcompiler=-fPIC",
+                "cuda/persistent_fp8_gemm.cu",
+                "-lcuda",
+                "-o",
+                str(output / "libfp8_gemm.so"),
+            ],
+            cwd=ROOT,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=600,
+        )
+
+
+def _load_library():
+    global _library
+    if _library is None:
+        from ..runtime import ensure_extensions
+
+        ensure_extensions("fp8_gemm")
+        lib = ct.CDLL(str(OUTPUT / "libfp8_gemm.so"))
+        lib.tk_fp8_create.argtypes = [ct.c_void_p] * 5 + [ct.c_int] * 7
+        lib.tk_fp8_create.restype = ct.c_void_p
+        lib.tk_fp8_launch.argtypes = [ct.c_void_p, ct.c_void_p]
+        lib.tk_fp8_launch.restype = ct.c_int
+        lib.tk_fp8_error.restype = ct.c_char_p
+        lib.tk_fp8_info.argtypes = [ct.c_void_p, ct.POINTER(ct.c_int)]
+        lib.tk_fp8_info.restype = None
+        lib.tk_fp8_destroy.argtypes = [ct.c_void_p]
+        lib.tk_fp8_destroy.restype = None
+        _library = lib
+    return _library
+
+
+class FP8GemmPlan:
+    """Reusable forward-only GEMM of prequantized operands on SM120.
+
+    A[M,K] and B[N,K] are contiguous float8_e4m3fn. sfA[M,K//128]
+    and sfB[N//128,K//128] are contiguous FP32 dequantization multipliers.
+    N and K must be positive multiples of 128; any positive M is supported.
+    Each unscaled K128 dot product is accumulated in FP32, then multiplied
+    by sfA*sfB and accumulated into a separate FP32 result. The output is
+    BF16 by default, or FP32 when requested. No quantization or autograd.
+    QMMA.SF uses internal unit scales (E8M0 127); external FP32 scales
+    are applied at K128 granularity.
+
+    Construct before CUDA Graph capture. Calls read current tensor contents
+    and overwrite the same output. Keep tensor storage/metadata fixed and
+    serialize calls to a plan; use separate plans for concurrent outputs.
+    """
+
+    def __init__(
+        self,
+        a,
+        b,
+        sfA,
+        sfB,
+        *,
+        out=None,
+        dtype=None,
+        config=0,
+        sms=0,
+        raster_group=8,
+    ):
+        self._handle = None
+        inputs = (a, b, sfA, sfB)
+        if any(not isinstance(t, torch.Tensor) for t in inputs):
+            raise TypeError("a, b, sfA and sfB must be tensors")
+        if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[1]:
+            raise ValueError("Expected A[M,K] and B[N,K]")
+        m, k = a.shape
+        n = b.shape[0]
+        if min(m, n, k) <= 0 or n % 128 or k % 128:
+            raise ValueError(
+                "M must be positive; N and K must be positive multiples of 128"
+            )
+        if max(m, n, k) > 2**31 - 128 or ((m + 127) // 128) * (n // 64) >= 2**31:
+            raise ValueError("Dimensions exceed the kernel's int32 indexing limits")
+        if a.dtype != torch.float8_e4m3fn or b.dtype != a.dtype:
+            raise ValueError("A and B must have dtype float8_e4m3fn")
+        if sfA.dtype != torch.float32 or sfA.shape != (m, k // 128):
+            raise ValueError("sfA must be FP32 [M,K//128]")
+        if sfB.dtype != torch.float32 or sfB.shape != (n // 128, k // 128):
+            raise ValueError("sfB must be FP32 [N//128,K//128]")
+        if not a.is_cuda or any(
+            t.device != a.device or not t.is_contiguous() for t in inputs
+        ):
+            raise ValueError("Expected contiguous tensors on one CUDA device")
+        if any(t.requires_grad for t in inputs):
+            raise ValueError(
+                "FP8 GEMM is forward-only; detach inputs requiring gradients"
+            )
+        if type(config) is not int or config not in range(len(CONFIGS)):
+            raise ValueError("Invalid config")
+        if type(sms) is not int or not 0 <= sms < 2**31:
+            raise ValueError("sms must be a nonnegative int32")
+        if type(raster_group) is not int or not 0 < raster_group < 2**31:
+            raise ValueError("raster_group must be a positive int32")
+        from ..runtime import require_sm120
+
+        require_sm120(a.device)
+        if out is not None and not isinstance(out, torch.Tensor):
+            raise TypeError("out must be a tensor")
+        if dtype is None:
+            dtype = out.dtype if out is not None else torch.bfloat16
+        if dtype not in (torch.bfloat16, torch.float32):
+            raise ValueError("Output dtype must be BF16 or FP32")
+        if out is None:
+            out = torch.empty((m, n), device=a.device, dtype=dtype)
+        if (
+            out.shape != (m, n)
+            or out.dtype != dtype
+            or out.device != a.device
+            or not out.is_contiguous()
+            or out.requires_grad
+        ):
+            raise ValueError(
+                "Invalid output: expected contiguous [M,N] on the input device without gradients"
+            )
+        if any(t.data_ptr() % 16 for t in (a, b, out)):
+            raise ValueError("A, B and output pointers must be 16-byte aligned")
+        lo, hi = out.data_ptr(), out.data_ptr() + out.numel() * out.element_size()
+        if any(
+            lo < t.data_ptr() + t.numel() * t.element_size() and t.data_ptr() < hi
+            for t in inputs
+        ):
+            raise ValueError("Output must not alias an input")
+        self._lib = _load_library()
+        self._refs = (*inputs, out)
+        self.out = out
+        self.device = a.device
+        with torch.cuda.device(self.device):
+            self._handle = self._lib.tk_fp8_create(
+                *(t.data_ptr() for t in self._refs),
+                m,
+                n,
+                k,
+                config,
+                sms,
+                raster_group,
+                int(dtype == torch.float32),
+            )
+        if not self._handle:
+            raise RuntimeError(self._lib.tk_fp8_error().decode())
+        values = (ct.c_int * 8)()
+        self._lib.tk_fp8_info(self._handle, values)
+        self.info = dict(
+            zip(
+                (
+                    "block_m",
+                    "block_n",
+                    "block_k",
+                    "stages",
+                    "shared_bytes",
+                    "initial_regs",
+                    "local_bytes",
+                    "grid",
+                ),
+                values,
+            )
+        )
+
+    def __call__(self):
+        with torch.cuda.device(self.device):
+            stream = torch.cuda.current_stream(self.device)
+            if self._lib.tk_fp8_launch(self._handle, stream.cuda_stream):
+                raise RuntimeError(self._lib.tk_fp8_error().decode())
+            for t in self._refs:
+                t.record_stream(stream)
+        return self.out
+
+    def __del__(self):
+        if getattr(self, "_handle", None):
+            self._lib.tk_fp8_destroy(self._handle)
+            self._handle = None
+
+
+def fp8_gemm(a, b, sfA, sfB, *, out=None, dtype=None):
+    """Compute scaled A @ B.T; see FP8GemmPlan for layouts and semantics.
+
+    For repeated calls or CUDA Graph capture, construct FP8GemmPlan once.
+    """
+    return FP8GemmPlan(a, b, sfA, sfB, out=out, dtype=dtype)()
+
+
+if __name__ == "__main__":
+    build()
