@@ -39,3 +39,38 @@ __device__ inline void load_fp8_factored(RT &dst, const ST &src, int k32_start=0
     }
 }
 }
+
+namespace fp8gemm {
+// Full, aligned shared tiles only; preserve the native FP8 transposing LDSM
+// fragment order. Row-tile advances are whole swizzle periods.
+template<class RT, class ST>
+__device__ __forceinline__ void load_fp8_col_factored(RT &dst, const ST &src) {
+    static_assert(sizeof(typename ST::dtype) == 1);
+    static_assert(std::is_same_v<typename RT::layout, kittens::ducks::rt_layout::col>);
+    static_assert(ST::rows == ST::underlying_rows && ST::cols == ST::underlying_cols);
+    static_assert(ST::rows == RT::rows && ST::cols == RT::cols);
+    constexpr int SB = ST::swizzle_bytes;
+    static_assert(alignof(ST) >= 8 * SB && ST::required_alignment >= 8 * SB);
+    static_assert(RT::tile_size_row == 32 && RT::tile_size_col == 16);
+    constexpr int panel_tiles = SB / 16;
+    const uint32_t lane_offset = ST::idx(0u, {kittens::laneid(), 0});
+    const uint32_t shared_base = __cvta_generic_to_shared(src.data);
+#pragma unroll
+    for (int i = 0; i < RT::height; ++i) {
+#pragma unroll
+        for (int j = 0; j < RT::width; ++j) {
+            const uint32_t addr = shared_base + (lane_offset ^ ((j % panel_tiles) * 16))
+                + i * 32 * SB + (j / panel_tiles) * ST::rows * SB;
+            auto &d = dst.tiles[i][j].data;
+            asm volatile(
+                "ldmatrix.sync.aligned.m16n16.x2.trans.shared::cta.b8 {%0,%1,%2,%3}, [%4];"
+                : "=r"(*reinterpret_cast<uint32_t*>(&d[0])),
+                  "=r"(*reinterpret_cast<uint32_t*>(&d[1])),
+                  "=r"(*reinterpret_cast<uint32_t*>(&d[2])),
+                  "=r"(*reinterpret_cast<uint32_t*>(&d[3]))
+                : "r"(addr));
+        }
+    }
+}
+
+}

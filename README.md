@@ -52,6 +52,48 @@ y = linear(x)
 - `quantize_weight`
 - `quantize_weight_rowwise`
 
+## Optional MXFP8 Stream-K
+
+The persistent MXFP8 kernels prefetch scales in the producer and use factored
+transposing shared-memory loads. Tensor maps are encoded by the CUDA driver
+when plans are created/rebound, including for the K128 FP32-scale kernels.
+
+Stream-K is opt-in; existing modules keep their persistent routing by default:
+
+```python
+from mxfp8 import MXFP8SwiGLU, configure_ffn_streamk
+
+mlp = MXFP8SwiGLU(1024, 2944, 1024, device="cuda")
+report = configure_ffn_streamk(mlp, reduction="atomic")  # before first forward
+# To allow Stream-K down forward too:
+# report = configure_ffn_streamk(mlp, reduction="atomic", down_forward="streamk")
+```
+
+`reduction="deterministic"` uses exclusive FP32 partials and increasing-K
+fixup; `"atomic"` uses TMA reduce-add into one slot per split tile. Atomic
+arrival order is not deterministic, and neither mode promises bitwise equality
+with an unsplit dot product. The adapter preserves parameters, autograd and
+optimizer bindings. Down forward stays persistent unless explicitly enabled;
+other forward/dX plans use a conservative wave-efficiency heuristic, and dW
+uses Stream-K. Shapes outside the fixed Stream-K panels retain the original
+persistent plan. Changing the configuration after installation is rejected.
+
+Warm up each shape before CUDA Graph capture. All adapted layers share one
+scratch allocation and must execute in order on one stream; concurrent model
+executions must not share this adapter. Every atomic replay includes its clear
+and fixup. The report records routes and used/allocated scratch bytes.
+`build_extensions("streamk")` builds the ten Stream-K variants; normal module
+construction builds their persistent dependencies. Low-level family plans are
+available in `mxfp8._kernels.streamk` and `streamk_wgrad` with explicit shape,
+SM-count, tail-wave and reduction settings.
+
+These changes were ported from dism-core's `42a199c`, `a0893a0`, `85d003d`
+and its 2026-11-24 working-tree FFN integration/TMA fix. No historical kernels
+are retained. CUDA device translation units remain Torch-free. The source
+project observed downstream training differences when changing forward
+reduction order; Stream-K is therefore an execution option, not a guarantee of
+training equivalence.
+
 ## FP8 forward GEMM with FP32 block scales
 
 `fp8_gemm` also provides a forward-only SM120 GEMM for prequantized E4M3

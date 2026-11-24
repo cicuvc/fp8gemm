@@ -29,6 +29,21 @@ def _path(*parts: str) -> Path:
 
 
 def _extension_spec(name: str) -> ExtensionSpec:
+    if name == "streamk":
+        from ._kernels import streamk, streamk_wgrad
+
+        return ExtensionSpec(
+            name, streamk.build,
+            tuple(streamk.OUTPUT / family / mode / "libstreamk.so"
+                  for family in streamk.FAMILIES for mode in ("multi", "atomic"))
+            + tuple(streamk_wgrad.OUTPUT.parent / mode / "libstreamk.so"
+                    for mode in ("multi", "atomic")),
+            (*tuple(_path("cuda").glob("streamk_*.cu")),
+             _path("cuda/mxfp8_streamk.cuh"), _path("cuda/mxfp8_streamk_host.cuh"),
+             _path("cuda/tma_ring_pipe.cuh"), _path("cuda/fp8_shared_load.cuh"),
+             _path("mxfp8/_kernels/streamk_build.py"),
+             *tuple(_path("third_party/thunderkittens/include").rglob("*.cuh"))),
+        )
     if name == "fp8_gemm":
         from ._kernels import fp8_gemm
 
@@ -37,6 +52,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             fp8_gemm.build,
             (fp8_gemm.OUTPUT / "libfp8_gemm.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_fp8_gemm.cu"),
                 _path("cuda/fp8_configs.inc"),
                 _path("cuda/fp8_shared_load.cuh"),
@@ -52,6 +68,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             weight_quantize.build,
             (weight_quantize.DEFAULT_OUTPUT / "libquant.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_weight_quantize.cu"),
                 _path("cuda/mxfp8_quantize.cuh"),
                 _path("cuda/linear_tma_buffer.cuh"),
@@ -69,6 +86,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
                 silu.OUTPUT / "libsilu_bwd_quantize.so",
             ),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/silu_bwd_elementwise.cu"),
                 _path("cuda/silu_bwd_quantize.cu"),
                 _path("cuda/silu_bwd_common.cuh"),
@@ -83,6 +101,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             gemm.build,
             (gemm.OUTPUT / "libgemm.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_gemm.cu"),
                 _path("cuda/mxfp8_configs.inc"),
                 _path("cuda/mxfp8_epilogue.cuh"),
@@ -99,6 +118,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             dgrad.build,
             (dgrad.OUTPUT / "libdgrad.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_dgrad.cu"),
                 _path("cuda/mxfp8_dgrad_configs.inc"),
                 _path("cuda/tma_ring_pipe.cuh"),
@@ -113,6 +133,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             wgrad.build,
             (wgrad.OUTPUT / "libwgrad.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_wgrad.cu"),
                 _path("cuda/mxfp8_wgrad_configs.inc"),
                 _path("cuda/tma_ring_pipe.cuh"),
@@ -127,6 +148,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             swiglu.build,
             (swiglu.OUTPUT / "libswiglu.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_swiglu.cu"),
                 _path("cuda/mxfp8_swiglu_configs.inc"),
                 _path("cuda/tma_ring_pipe.cuh"),
@@ -141,6 +163,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             swiglu_dgrad.build,
             (swiglu_dgrad.OUTPUT / "libswd.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_swiglu_dgrad.cu"),
                 _path("cuda/mxfp8_swiglu_dgrad_configs.inc"),
                 _path("cuda/tma_ring_pipe.cuh"),
@@ -155,6 +178,7 @@ def _extension_spec(name: str) -> ExtensionSpec:
             lse.build,
             (lse.OUTPUT / "liblse.so",),
             (
+                _path("third_party/thunderkittens/include/types/global/tma_descriptor.cuh"),
                 _path("cuda/persistent_mxfp8_lse.cu"),
                 _path("cuda/persistent_mxfp8_gemm.cu"),
                 _path("cuda/mxfp8_configs.inc"),
@@ -182,6 +206,7 @@ _GROUPS = {
 }
 _EXTENSIONS = (
     "fp8_gemm",
+    "streamk",
     "quantize",
     "silu",
     "gemm",

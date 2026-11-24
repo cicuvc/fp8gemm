@@ -18,7 +18,10 @@ template<int R,int C,int BN,int S> struct Config {
     using A=kt::st_fp8e4m3<4*R,BN>;
     using B=kt::st_fp8e4m3<BN,C>;
     using O=kt::st_bf<4*R,C>;
-    struct Packet {A a[2];B b;};
+    struct Packet {
+        A a[2]; B b;
+        uint32_t scale_a[8*R], scale_b[(BN/32)*(C/32)];
+    };
     struct Shared {Packet input[S];O output[2];};
     struct Args {
         Global<A> a;Global<B> b;Global<O> out;
@@ -30,20 +33,8 @@ template<int R,int C,int BN,int S> struct Config {
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
     static_assert((BN/32)*(C/32)<=32);
-    struct ScalePrefetch {
+    struct ScaleValues {
         uint32_t a[R/16],b;
-        __device__ __forceinline__ void load(const Args &args,int nr,int kc,int step,int lane) {
-            int block=step*(BN/32)/4;
-#pragma unroll
-            for(int i=0;i<R/16;i++) {
-                int row=nr+i*16+lane/4+8*(lane&1);
-                a[i]=(row<args.m && step<args.steps)
-                    ?args.as[size_t(block)*args.as_stride+row]:0;
-            }
-            int row=step*(BN/32)+(lane/(C/32))%(BN/32),col=kc/32+lane%(C/32);
-            b=(row<(args.n+31)/32 && col<args.bs_stride)
-                ?args.bs[size_t(row)*args.bs_stride+col]:0;
-        }
     };
 };
 
@@ -65,6 +56,18 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_dgrad(
                 int2 coord=raster(task,args.ncols,args.nrows,args.group);
                 int nr=coord.x*8*R,kc=coord.y*C;
                 for(int step=0;step<args.steps;step++) {
+                    uint32_t prefetched_a[8*R/32], prefetched_b=0;
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        int global_row=nr+lane+i*32;
+                        prefetched_a[i]=global_row<args.m
+                            ?args.as[size_t(step*(BN/32)/4)*args.as_stride+global_row]:0;
+                    }
+                    if(lane<(BN/32)*(C/32)) {
+                        int row=step*(BN/32)+lane/(C/32), col=kc/32+lane%(C/32);
+                        prefetched_b=(row<(args.n+31)/32 && col<args.bs_stride)
+                            ?args.bs[size_t(row)*args.bs_stride+col]:0;
+                    }
                     auto p=pipe.waitBuffer(0,shared.input);auto &tile=p.template get<0>();
                     if(leader) {
                         auto &bar=p.getBarrier();
@@ -72,6 +75,15 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_dgrad(
                         kt::tma::load_async(tile.a[0],args.a,{0,0,nr,step*BN},bar);
                         kt::tma::load_async(tile.a[1],args.a,{0,0,nr+4*R,step*BN},bar);
                         kt::tma::load_async(tile.b,args.b,{0,0,step*BN,kc},bar);
+                    }
+                    // All producer lanes publish their scale stores through the same
+                    // release/acquire generation as the TMA matrix tile.
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        tile.scale_a[lane+i*32]=prefetched_a[i];
+                    }
+                    if(lane<(BN/32)*(C/32)) {
+                        tile.scale_b[lane]=prefetched_b;
                     }
                     last=p.SlotIdx;p.submitToNextAndTrigger();pipe.moveNext();
                 }
@@ -85,27 +97,32 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_dgrad(
             int2 coord=raster(task,args.ncols,args.nrows,args.group);
             int nr=coord.x*8*R+group*4*R+warp*R,kc=coord.y*C;
             kt::rt_fl<C,R> accum;kt::warp::rt_maps::zero(accum);
-            typename CF::ScalePrefetch next;
-            next.load(args,nr,kc,0,lane);
+            typename CF::ScaleValues current;
+            // Scales arrive in the acquired matrix packet.
             for(int step=0;step<args.steps;step++) {
                 auto p=pipe.waitBuffer(2,shared.input);auto &tile=p.template get<0>();
+                // Read every scale before releasing this input generation.
+#pragma unroll
+                for(int i=0;i<R/16;i++)
+                    current.a[i]=tile.scale_a[group*4*R+warp*R+i*16+lane/4+8*(lane&1)];
+                current.b=tile.scale_b[lane%((BN/32)*(C/32))];
                 kt::rt_fp8e4m3<R,BN> ar;
                 kt::rt<kt::fp8e4m3,BN,C,kt::ducks::rt_layout::col> br;
                 kt::mxfp8_scale<R,BN> as;kt::mxfp8_scale<C,BN> bs;
                 load_fp8_factored<4,true>(ar,tile.a[group]);
                 // Native transposing LDSM is already in QMMA A register order.
-                kt::warp::load(br,tile.b);
+                load_fp8_col_factored(br,tile.b);
 #pragma unroll
                 for(int i=0;i<R/16;i++)
 #pragma unroll
                     for(int t=0;t<BN/32;t++)
-                        as.data[i][t]=next.a[i]>>(8*((step*(BN/32)+t)%4));
+                        as.data[i][t]=current.a[i]>>(8*((step*(BN/32)+t)%4));
 #pragma unroll
                 for(int j=0;j<C/16;j++)
 #pragma unroll
                     for(int t=0;t<BN/32;t++)
-                        bs.data[j][t]=__shfl_sync(0xffffffff,next.b,t*(C/32)+j/2);
-                next.load(args,nr,kc,step+1,lane);
+                        bs.data[j][t]=__shfl_sync(0xffffffff,current.b,t*(C/32)+j/2);
+                // No consumer global scale prefetch.
                 p.submitToNextAndTrigger();pipe.moveNext();
                 kt::rt_fp8e4m3<C,BN> weight_a;
 #pragma unroll

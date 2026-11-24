@@ -11,6 +11,23 @@
 #define FP8GEMM_FACTORED_STORES 0
 #endif
 namespace fp8gemm {
+// Scale tensors may have a byte-aligned storage offset. Use one load for the
+// naturally aligned production layout, retaining the unaligned API contract.
+template<int Bytes>
+__device__ __forceinline__ uint32_t mx_load_row_scale(const uint8_t *ptr) {
+    static_assert(Bytes==1 || Bytes==2 || Bytes==4);
+    if constexpr(Bytes==1)return *ptr;
+    if((reinterpret_cast<uintptr_t>(ptr)&(Bytes-1))==0) {
+        uint32_t word;
+        if constexpr(Bytes==2)asm("ld.global.u16 %0, [%1];" : "=r"(word) : "l"(ptr));
+        else asm("ld.global.u32 %0, [%1];" : "=r"(word) : "l"(ptr));
+        return word;
+    }
+    uint32_t word=0;
+#pragma unroll
+    for(int j=0;j<Bytes;j++)word|=uint32_t(ptr[j])<<(8*j);
+    return word;
+}
 template<class ST,class RT>
 __device__ __forceinline__ void mx_store_output(ST &dst,const RT &src) {
 #if FP8GEMM_FACTORED_STORES
@@ -40,8 +57,18 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
     struct Packet {
         ATile a[2];BTile b;
     };
+    // Metadata follows the input ring's slot lifetime. Keep it outside Packet
+    // so tile alignment does not pad every metadata entry by 256--1024 bytes.
+    using AScale=std::conditional_t<BK==32,uint8_t,
+                 std::conditional_t<BK==64,uint16_t,uint32_t>>;
+    using BScale=std::conditional_t<RowwiseB,AScale,uint8_t>;
+    struct ScalePacket {
+        AScale a[8*R];
+        BScale b[RowwiseB?C:SR*SC];
+    };
     struct Shared {
         Packet input[S];
+        ScalePacket scales[S];
         std::conditional_t<OnlyQ,QTile,std::conditional_t<SaveQ,OutputStorage,OTile>> output[2];
     };
     struct Args {
@@ -56,34 +83,6 @@ template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE
     };
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
-    struct ScalePrefetch {
-        uint32_t a[R/16],b[RowwiseB ? (C/16)*SC : 1];
-        __device__ __forceinline__ void load(const Args &args,int mr,int nc,int k,int lane) {
-#pragma unroll
-            for(int i=0;i<R/16;i++) {
-                int row=mr+i*16+lane/4+8*(lane&1);
-                a[i]=(row<args.m && k<args.ktiles)
-                    ?args.as[size_t(uint32_t(k)*SC/4)*args.as_stride+uint32_t(row)]:0;
-            }
-            if constexpr(RowwiseB) {
-#pragma unroll
-                for(int i=0;i<C/16;i++) {
-                    int row=nc+i*16+lane/4+8*(lane&1);
-#pragma unroll
-                    for(int t=0;t<SC;t++) {
-                        int col=k*SC+t;
-                        b[i*SC+t]=(row<args.n && col<args.sc)
-                            ?args.bs[size_t(row)*args.sc+col]:0;
-                    }
-                }
-            } else {
-                // Broadcast the small set of shared 32x32 scales.
-                int row=nc/32+(lane/SC)%SR,col=k*SC+lane%SC;
-                b[0]=(row<(args.n+31)/32 && col<args.sc)
-                    ?args.bs[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
-            }
-        }
-    };
 };
 template<int R,int C,int BK,int S,bool SaveQ=false,bool OnlyQ=false,bool SaveLSE=false,bool Softcap=false,bool RowwiseB=false>
 __global__ __launch_bounds__(384,1) void persistent_mxfp8(
@@ -103,13 +102,47 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
                 int2 coord=mx_raster(task,args.ntiles,args.mtiles,args.raster_group);
                 int mr=coord.x*(8*R),nc=coord.y*C;
                 for(int k=0;k<args.ktiles;k++) {
+                    // Prefetch into registers before acquiring the shared ring slot.
+                    typename CF::AScale pa[8*R/32];
+                    constexpr int scale_count=(RowwiseB?C:CF::SR)*CF::SC;
+                    uint32_t pb=0;
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        int row=mr+lane+i*32;
+                        uint32_t word=row<args.m
+                            ?args.as[size_t(k*(BK/32)/4)*args.as_stride+row]:0;
+                        pa[i]=word>>(8*((k*(BK/32))%4));
+                    }
+                    if constexpr(!RowwiseB) {
+                        if(lane<scale_count) {
+                            int row=nc/32+lane/(BK/32),col=k*(BK/32)+lane%(BK/32);
+                            bool valid=row<(args.n+31)/32 && col<args.sc;
+                            pb=valid?args.bs[size_t(row)*args.sc+col]:0;
+                        }
+                    }
                     auto packet=pipe.waitBuffer(0,shared.input);auto &tile=packet.template get<0>();
+                    auto &scale=shared.scales[packet.SlotIdx];
                     if(leader) {
                         auto &bar=packet.getBarrier();
                         kt::tma::expect_bytes(bar,(8*R+C)*BK);
                         kt::tma::load_async(tile.a[0],args.a,{0,0,mr,k*BK},bar);
                         kt::tma::load_async(tile.a[1],args.a,{0,0,mr+4*R,k*BK},bar);
                         kt::tma::load_async(tile.b,args.b,{0,0,nc,k*BK},bar);
+                    }
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++)scale.a[lane+i*32]=pa[i];
+                    if constexpr(RowwiseB) {
+                        // CE has many more B exponents than blockwise FFN weights.
+                        // Stage them after acquisition, while operand TMA is in flight,
+                        // to avoid carrying the entire set across the slot wait.
+#pragma unroll
+                        for(int i=0;i<C/32;i++) {
+                            int index=lane+i*32,row=nc+index,col=k*CF::SC;
+                            scale.b[index]=(row<args.n && col<args.sc)
+                                ?mx_load_row_scale<CF::SC>(args.bs+size_t(row)*args.sc+col):0;
+                        }
+                    } else if(lane<scale_count) {
+                        scale.b[lane]=pb;
                     }
                     last=packet.SlotIdx;packet.submitToNextAndTrigger();pipe.moveNext();
                 }
@@ -123,30 +156,29 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8(
             kt::rt_fl<R,C> accum;kt::warp::rt_maps::zero(accum);
             int2 coord=mx_raster(task,args.ntiles,args.mtiles,args.raster_group);
             int mr=coord.x*8*R+group*4*R+warp*R,nc=coord.y*C;
-            typename CF::ScalePrefetch next;
-            next.load(args,mr,nc,0,lane);
             for(int k=0;k<args.ktiles;k++) {
                 auto packet=pipe.waitBuffer(2,shared.input);auto &tile=packet.template get<0>();
+                const auto &scale=shared.scales[packet.SlotIdx];
+                uint32_t block_scale=0;
+                if constexpr(!RowwiseB)block_scale=scale.b[lane%(CF::SR*CF::SC)];
                 kt::rt_fp8e4m3<R,BK> ar;kt::rt_fp8e4m3<C,BK> br;
                 kt::mxfp8_scale<R,BK> as;kt::mxfp8_scale<C,BK> bs;
                 load_fp8_factored<4,false>(ar,tile.a[group]);
                 load_fp8_factored<1,true>(br,tile.b);
 #pragma unroll
                 for(int i=0;i<R/16;i++) {
-                    uint32_t word=next.a[i];
+                    uint32_t word=uint32_t(scale.a[group*4*R+warp*R+i*16+lane/4+8*(lane&1)]);
 #pragma unroll
-                    for(int kk=0;kk<CF::SC;kk++)as.data[i][kk]=word >> (8*((k*CF::SC+kk)%4));
+                    for(int kk=0;kk<CF::SC;kk++)as.data[i][kk]=word >> (8*kk);
                 }
 #pragma unroll
                 for(int i=0;i<C/16;i++) {
 #pragma unroll
                     for(int kk=0;kk<CF::SC;kk++) {
-                        if constexpr(RowwiseB)bs.data[i][kk]=next.b[i*CF::SC+kk];
-                        else bs.data[i][kk]=__shfl_sync(0xffffffff,next.b[0],(i/2)*CF::SC+kk);
+                        if constexpr(RowwiseB)bs.data[i][kk]=uint32_t(scale.b[i*16+lane/4+8*(lane&1)])>>(8*kk);
+                        else bs.data[i][kk]=__shfl_sync(0xffffffff,block_scale,(i/2)*CF::SC+kk);
                     }
                 }
-                // Issue next-stage scale loads before this stage's QMMA.
-                next.load(args,mr,nc,k+1,lane);
                 packet.submitToNextAndTrigger();pipe.moveNext();
                 kt::warp::wmma::mma_ABt_block_scaled(accum,ar,br,accum,as,bs);
             }

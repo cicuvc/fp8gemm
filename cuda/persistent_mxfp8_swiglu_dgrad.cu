@@ -24,8 +24,16 @@ template<int R,int C,int BN,int S> struct Config {
         A gate[2],up[2];
         B weight_gate,weight_up;
     };
+    // Compact metadata uses the same acquire/publish/release as input[slot].
+    using AScale=std::conditional_t<BN==32,uint8_t,
+                 std::conditional_t<BN==64,uint16_t,uint32_t>>;
+    struct ScalePacket {
+        AScale gate[8*R],up[8*R];
+        uint8_t wg[(BN/32)*(C/32)],wu[(BN/32)*(C/32)];
+    };
     struct Shared {
         Packet input[S];
+        ScalePacket scales[S];
         O output[2];
     };
     struct Args {
@@ -40,27 +48,8 @@ template<int R,int C,int BN,int S> struct Config {
     static_assert(smem<=101376);
     static_assert((BN/32)*(C/32)<=32);
 
-    struct ScalePrefetch {
+    struct ScaleValues {
         uint32_t gate[R/16],up[R/16],weight_gate,weight_up;
-        __device__ __forceinline__ void load(
-            const Args &args,int nr,int kc,int step,int lane) {
-            int block=step*(BN/32)/4;
-#pragma unroll
-            for(int i=0;i<R/16;i++) {
-                int row=nr+i*16+lane/4+8*(lane&1);
-                bool valid=row<args.m && step<args.steps;
-                gate[i]=valid
-                    ?args.gate_scale[size_t(block)*args.as_stride+row]:0;
-                up[i]=valid
-                    ?args.up_scale[size_t(block)*args.as_stride+row]:0;
-            }
-            int row=step*(BN/32)+(lane/(C/32))%(BN/32),col=kc/32+lane%(C/32);
-            bool valid=row<(args.n+31)/32 && col<args.bs_stride;
-            weight_gate=valid
-                ?args.weight_gate_scale[size_t(row)*args.bs_stride+col]:0;
-            weight_up=valid
-                ?args.weight_up_scale[size_t(row)*args.bs_stride+col]:0;
-        }
     };
 };
 
@@ -97,8 +86,25 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu_dgrad(
                 int2 coord=raster(task,args.ncols,args.nrows,args.group);
                 int nr=coord.x*8*R,kc=coord.y*C;
                 for(int step=0;step<args.steps;step++) {
+                    typename CF::AScale pg[8*R/32],pu[8*R/32];
+                    uint32_t pwg=0,pwu=0;
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        int row=nr+lane+i*32;
+                        size_t index=size_t(step*(BN/32)/4)*args.as_stride+row;
+                        pg[i]=(row<args.m?args.gate_scale[index]:0)>>(8*((step*(BN/32))%4));
+                        pu[i]=(row<args.m?args.up_scale[index]:0)>>(8*((step*(BN/32))%4));
+                    }
+                    if(lane<(BN/32)*(C/32)) {
+                        int row=step*(BN/32)+lane/(C/32),col=kc/32+lane%(C/32);
+                        bool valid=row<(args.n+31)/32 && col<args.bs_stride;
+                        size_t index=size_t(row)*args.bs_stride+col;
+                        pwg=valid?args.weight_gate_scale[index]:0;
+                        pwu=valid?args.weight_up_scale[index]:0;
+                    }
                     auto p=pipe.waitBuffer(0,shared.input);
                     auto &tile=p.template get<0>();
+                    auto &scale=shared.scales[p.SlotIdx];
                     if(leader) {
                         auto &bar=p.getBarrier();
                         kt::tma::expect_bytes(bar,(16*R+2*C)*BN);
@@ -110,6 +116,14 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu_dgrad(
                                             {0,0,step*BN,kc},bar);
                         kt::tma::load_async(tile.weight_up,args.weight_up,
                                             {0,0,step*BN,kc},bar);
+                    }
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        scale.gate[lane+i*32]=pg[i];
+                        scale.up[lane+i*32]=pu[i];
+                    }
+                    if(lane<(BN/32)*(C/32)) {
+                        scale.wg[lane]=pwg;scale.wu[lane]=pwu;
                     }
                     last=p.SlotIdx;p.submitToNextAndTrigger();pipe.moveNext();
                 }
@@ -124,26 +138,31 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu_dgrad(
             int nr=coord.x*8*R+group*4*R+warp*R,kc=coord.y*C;
             kt::rt_fl<C,R> accum;
             kt::warp::rt_maps::zero(accum);
-            typename CF::ScalePrefetch next;
-            next.load(args,nr,kc,0,lane);
             for(int step=0;step<args.steps;step++) {
                 auto p=pipe.waitBuffer(2,shared.input);
                 auto &tile=p.template get<0>();
-                typename CF::ScalePrefetch current=next;
-                next.load(args,nr,kc,step+1,lane);
+                const auto &scale=shared.scales[p.SlotIdx];
+                typename CF::ScaleValues current;
+#pragma unroll
+                for(int i=0;i<R/16;i++) {
+                    int row=group*4*R+warp*R+i*16+lane/4+8*(lane&1);
+                    current.gate[i]=scale.gate[row];current.up[i]=scale.up[row];
+                }
+                current.weight_gate=scale.wg[lane%((BN/32)*(C/32))];
+                current.weight_up=scale.wu[lane%((BN/32)*(C/32))];
                 {
                     kt::rt_fp8e4m3<R,BN> a;
                     kt::rt<kt::fp8e4m3,BN,C,kt::ducks::rt_layout::col> b;
                     kt::mxfp8_scale<R,BN> as;
                     kt::mxfp8_scale<C,BN> bs;
                     load_fp8_factored<4,true>(a,tile.gate[group]);
-                    kt::warp::load(b,tile.weight_gate);
+                    load_fp8_col_factored(b,tile.weight_gate);
 #pragma unroll
                     for(int i=0;i<R/16;i++)
 #pragma unroll
                         for(int t=0;t<BN/32;t++)
                             as.data[i][t]=
-                                current.gate[i]>>(8*((step*(BN/32)+t)%4));
+                                current.gate[i]>>(8*t);
 #pragma unroll
                     for(int j=0;j<C/16;j++)
 #pragma unroll
@@ -161,13 +180,13 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu_dgrad(
                     kt::mxfp8_scale<R,BN> as;
                     kt::mxfp8_scale<C,BN> bs;
                     load_fp8_factored<4,true>(a,tile.up[group]);
-                    kt::warp::load(b,tile.weight_up);
+                    load_fp8_col_factored(b,tile.weight_up);
 #pragma unroll
                     for(int i=0;i<R/16;i++)
 #pragma unroll
                         for(int t=0;t<BN/32;t++)
                             as.data[i][t]=
-                                current.up[i]>>(8*((step*(BN/32)+t)%4));
+                                current.up[i]>>(8*t);
 #pragma unroll
                     for(int j=0;j<C/16;j++)
 #pragma unroll

@@ -16,7 +16,7 @@ template<int R,int C,int BM,int S> struct Config {
     using A=kt::st_fp8e4m3<4*R,BM>;
     using B=kt::st_fp8e4m3<BM,C>;
     using O=kt::st_bf<4*R,C>;
-    struct Packet {A a[2];B b;};
+    struct Packet {A a[2];B b;uint32_t scale_a[8*R],scale_b[C];};
     struct Shared {Packet input[S];O output[2];};
     struct Args {
         Global<A> a;Global<B> b;Global<O> out;
@@ -27,23 +27,8 @@ template<int R,int C,int BM,int S> struct Config {
     };
     static constexpr int smem=1024+sizeof(Shared);
     static_assert(smem<=101376);
-    struct ScalePrefetch {
+    struct ScaleValues {
         uint32_t a[R/16],b[C/16];
-        __device__ __forceinline__ void load(const Args &args,int nr,int kc,int step,int lane) {
-            int block=step*(BM/32)/4;
-#pragma unroll
-            for(int i=0;i<R/16;i++) {
-                int row=nr+i*16+lane/4+8*(lane&1);
-                a[i]=(row<args.n && step<args.steps)
-                    ?args.as[size_t(block)*args.as_stride+row]:0;
-            }
-#pragma unroll
-            for(int j=0;j<C/16;j++) {
-                int col=kc+j*16+lane/4+8*(lane&1);
-                b[j]=(col<args.k && step<args.steps)
-                    ?args.bs[size_t(block)*args.bs_stride+col]:0;
-            }
-        }
     };
 };
 
@@ -65,6 +50,17 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_wgrad(
                 int2 coord=raster(task,args.ncols,args.nrows,args.group);
                 int nr=coord.x*8*R,kc=coord.y*C;
                 for(int step=0;step<args.steps;step++) {
+                    uint32_t pa[8*R/32],pb[C/32];
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        int row=nr+lane+i*32;
+                        pa[i]=row<args.n?args.as[size_t(step*(BM/32)/4)*args.as_stride+row]:0;
+                    }
+#pragma unroll
+                    for(int i=0;i<C/32;i++) {
+                        int col=kc+lane+i*32;
+                        pb[i]=col<args.k?args.bs[size_t(step*(BM/32)/4)*args.bs_stride+col]:0;
+                    }
                     auto p=pipe.waitBuffer(0,shared.input);auto &tile=p.template get<0>();
                     if(leader) {
                         auto &bar=p.getBarrier();
@@ -73,6 +69,10 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_wgrad(
                         kt::tma::load_async(tile.a[1],args.a,{0,0,nr+4*R,step*BM},bar);
                         kt::tma::load_async(tile.b,args.b,{0,0,step*BM,kc},bar);
                     }
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++)tile.scale_a[lane+i*32]=pa[i];
+#pragma unroll
+                    for(int i=0;i<C/32;i++)tile.scale_b[lane+i*32]=pb[i];
                     last=p.SlotIdx;p.submitToNextAndTrigger();pipe.moveNext();
                 }
             }
@@ -85,28 +85,32 @@ __global__ __launch_bounds__(384,1) void persistent_mxfp8_wgrad(
             int2 coord=raster(task,args.ncols,args.nrows,args.group);
             int nr=coord.x*8*R+group*4*R+warp*R,kc=coord.y*C;
             kt::rt_fl<R,C> accum;kt::warp::rt_maps::zero(accum);
-            typename CF::ScalePrefetch next;
-            next.load(args,nr,kc,0,lane);
+            typename CF::ScaleValues current;
             for(int step=0;step<args.steps;step++) {
                 auto p=pipe.waitBuffer(2,shared.input);auto &tile=p.template get<0>();
+                #pragma unroll
+                for(int i=0;i<R/16;i++)
+                    current.a[i]=tile.scale_a[group*4*R+warp*R+i*16+lane/4+8*(lane&1)];
+#pragma unroll
+                for(int j=0;j<C/16;j++)
+                    current.b[j]=tile.scale_b[j*16+lane/4+8*(lane&1)];
                 kt::rt_fp8e4m3<R,BM> ar;
                 kt::rt<kt::fp8e4m3,BM,C,kt::ducks::rt_layout::col> br;
                 kt::mxfp8_scale<R,BM> as;kt::mxfp8_scale<C,BM> bs;
                 load_fp8_factored<4,false>(ar,tile.a[group]);
                 // Native transposing LDSM; accept the register-pair rearrangement
                 // that mma_AB needs for the QMMA B operand.
-                kt::warp::load(br,tile.b);
+                load_fp8_col_factored(br,tile.b);
 #pragma unroll
                 for(int i=0;i<R/16;i++)
 #pragma unroll
                     for(int t=0;t<BM/32;t++)
-                        as.data[i][t]=next.a[i]>>(8*((step*(BM/32)+t)%4));
+                        as.data[i][t]=current.a[i]>>(8*((step*(BM/32)+t)%4));
 #pragma unroll
                 for(int j=0;j<C/16;j++)
 #pragma unroll
                     for(int t=0;t<BM/32;t++)
-                        bs.data[j][t]=next.b[j]>>(8*((step*(BM/32)+t)%4));
-                next.load(args,nr,kc,step+1,lane);
+                        bs.data[j][t]=current.b[j]>>(8*((step*(BM/32)+t)%4));
                 p.submitToNextAndTrigger();pipe.moveNext();
                 kt::warp::wmma::mma_AB(accum,ar,br,accum,as,bs);
             }

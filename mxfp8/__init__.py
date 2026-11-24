@@ -7,6 +7,7 @@ from .modules import MXFP8DownProjection, MXFP8Linear, MXFP8MLP, MXFP8SwiGLU
 from .norm import MXFP8RMSNorm
 from .optim import FusedAdamWMXFP8, bind_optimizer
 from .quantization import pack_a_scales, quantize_weight, quantize_weight_rowwise
+from .streamk import configure_ffn_streamk
 from .runtime import (
     build_extensions,
     ensure_extensions,
@@ -30,6 +31,7 @@ __all__ = [
     "MXFP8RMSNorm",
     "MXFP8SwiGLU",
     "bind_optimizer",
+    "configure_ffn_streamk",
     "build_extensions",
     "ensure_extensions",
     "extension_status",

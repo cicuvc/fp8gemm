@@ -34,15 +34,23 @@ template<int R,int C,int BK,int S,bool Aux> struct Config {
         ATile a[2];
         BTile gate,up;
     };
+    // Metadata follows the input ring's slot lifetime. Keep it outside Packet
+    // so tile alignment does not pad every metadata entry by 256--1024 bytes.
+    using AScale=std::conditional_t<BK==32,uint8_t,
+                 std::conditional_t<BK==64,uint16_t,uint32_t>>;
+    struct ScalePacket {
+        AScale a[8*R];
+        uint8_t gate[((C+31)/32)*(BK/32)],up[((C+31)/32)*(BK/32)];
+    };
     static constexpr int max_smem=101376;
-    // Two tiles per consumer let gate and up TMA stores overlap. Fall back
-    // to one tile, with serialized async stores plus read waits, when adding
-    // the second tile would exceed the SM120 shared-memory limit.
+    // Preserve the existing one/two auxiliary-buffer choice. Compact scale
+    // metadata fits beside it for every configuration (checked below).
     static constexpr int output_buffers=
         Aux && 1024+S*sizeof(Packet)+2*sizeof(OTile)+2*sizeof(OTile)<=max_smem
         ?2:1;
     struct Shared {
         Packet input[S];
+        ScalePacket scales[S];
         OTile output[2][output_buffers];
     };
     struct Args {
@@ -79,8 +87,30 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
                 int2 coord=raster(task,args.ntiles,args.mtiles,args.raster_group);
                 int mr=coord.x*(8*R),nc=coord.y*C;
                 for(int k=0;k<args.ktiles;k++) {
+                    // Prefetch into registers before acquiring the shared ring slot.
+                    typename CF::AScale pa[8*R/32];
+                    constexpr int scale_count=((C+31)/32)*(BK/32);
+                    uint32_t pb[(scale_count+31)/32],pc[(scale_count+31)/32];
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++) {
+                        int row=mr+lane+i*32;
+                        uint32_t word=row<args.m
+                            ?args.as[size_t(k*(BK/32)/4)*args.as_stride+row]:0;
+                        pa[i]=word>>(8*((k*(BK/32))%4));
+                    }
+#pragma unroll
+                    for(int i=0;i<(scale_count+31)/32;i++) {
+                        int index=lane+i*32;
+                        if(index<scale_count) {
+                            int row=nc/32+index/(BK/32),col=k*(BK/32)+index%(BK/32);
+                            bool valid=row<(args.n+31)/32 && col<args.sc;
+                            pb[i]=valid?args.gs[size_t(row)*args.sc+col]:0;
+                            pc[i]=valid?args.us[size_t(row)*args.sc+col]:0;
+                        }
+                    }
                     auto packet=pipe.waitBuffer(0,shared.input);
                     auto &tile=packet.template get<0>();
+                    auto &scale=shared.scales[packet.SlotIdx];
                     if(leader) {
                         auto &bar=packet.getBarrier();
                         // Four FP8 TMA loads: two half-M X panels and one N
@@ -91,6 +121,16 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
                         kt::tma::load_async(tile.gate,args.gate,{0,0,nc,k*BK},bar);
                         kt::tma::load_async(tile.up,args.up,{0,0,nc,k*BK},bar);
                     }
+#pragma unroll
+                    for(int i=0;i<8*R/32;i++)scale.a[lane+i*32]=pa[i];
+#pragma unroll
+                    for(int i=0;i<(scale_count+31)/32;i++) {
+                        int index=lane+i*32;
+                        if(index<scale_count) {
+                            scale.gate[index]=pb[i];
+                            scale.up[index]=pc[i];
+                        }
+                    }
                     last=packet.SlotIdx;packet.submitToNextAndTrigger();pipe.moveNext();
                 }
             }
@@ -99,34 +139,18 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
     } else {
         kt::warpgroup::increase_registers<232>();
         bool writer=warp==0 && kt::warp::elect_leader();
-        struct ScalePrefetch {
-            uint32_t a[R/16],gate,up;
-            __device__ __forceinline__ void load(
-                const typename CF::Args &args,int mr,int nc,int k,int lane) {
-#pragma unroll
-                for(int i=0;i<R/16;i++) {
-                    int row=mr+i*16+lane/4+8*(lane&1);
-                    a[i]=(row<args.m && k<args.ktiles)
-                        ?args.as[size_t(uint32_t(k)*SC/4)*args.as_stride+uint32_t(row)]:0;
-                }
-                int row=nc/32+(lane/SC)%SR,col=k*SC+lane%SC;
-                bool valid=row<(args.n+31)/32 && col<args.sc;
-                gate=valid?args.gs[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
-                up=valid?args.us[size_t(uint32_t(row))*uint32_t(args.sc)+uint32_t(col)]:0;
-            }
-        };
-
         for(int task=blockIdx.x;task<args.total;task+=gridDim.x) {
             kt::rt_fl<R,C> gate_acc,up_acc;
             kt::warp::rt_maps::zero(gate_acc);
             kt::warp::rt_maps::zero(up_acc);
             int2 coord=raster(task,args.ntiles,args.mtiles,args.raster_group);
             int mr=coord.x*8*R+group*4*R+warp*R,nc=coord.y*C;
-            ScalePrefetch next;
-            next.load(args,mr,nc,0,lane);
             for(int k=0;k<args.ktiles;k++) {
                 auto packet=pipe.waitBuffer(2,shared.input);
                 auto &tile=packet.template get<0>();
+                const auto &scale=shared.scales[packet.SlotIdx];
+                uint32_t gate_scale=scale.gate[lane%(SR*SC)];
+                uint32_t up_scale=scale.up[lane%(SR*SC)];
                 kt::rt_fp8e4m3<R,BK> ar;
                 kt::rt_fp8e4m3<C,BK> gr,ur;
                 kt::mxfp8_scale<R,BK> as,half_as;
@@ -136,10 +160,10 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
                 load_fp8_factored<1,true>(ur,tile.up);
 #pragma unroll
                 for(int i=0;i<R/16;i++) {
-                    uint32_t word=next.a[i];
+                    uint32_t word=uint32_t(scale.a[group*4*R+warp*R+i*16+lane/4+8*(lane&1)]);
 #pragma unroll
                     for(int kk=0;kk<SC;kk++) {
-                        as.data[i][kk]=word >> (8*((k*SC+kk)%4));
+                        as.data[i][kk]=word >> (8*kk);
                         // Decrementing E8M0 by one halves the entire gate
                         // projection. Keep the unmodified scale for up.
                         half_as.data[i][kk]=max(int(as.data[i][kk]&255)-1,0);
@@ -150,12 +174,10 @@ __global__ __launch_bounds__(384,1) void persistent_swiglu(
 #pragma unroll
                     for(int kk=0;kk<SC;kk++) {
                         int source=(i/2)*SC+kk;
-                        gs.data[i][kk]=__shfl_sync(0xffffffff,next.gate,source);
-                        us.data[i][kk]=__shfl_sync(0xffffffff,next.up,source);
+                        gs.data[i][kk]=__shfl_sync(0xffffffff,gate_scale,source);
+                        us.data[i][kk]=__shfl_sync(0xffffffff,up_scale,source);
                     }
                 }
-                // Hide global scale latency behind both QMMA instructions.
-                next.load(args,mr,nc,k+1,lane);
                 packet.submitToNextAndTrigger();pipe.moveNext();
                 kt::warp::wmma::mma_ABt_block_scaled(gate_acc,ar,gr,gate_acc,half_as,gs);
                 kt::warp::wmma::mma_ABt_block_scaled(up_acc,ar,ur,up_acc,as,us);
