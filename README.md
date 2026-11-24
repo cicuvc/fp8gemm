@@ -103,14 +103,76 @@ Run `python benchmarks/bench_fp8_gemm.py` for warm CUDA Graph timings of
 each configuration and a BF16 `torch.mm` latency baseline. Quantization
 and plan setup are excluded.
 
+## FP8 SwiGLU training with FP32 block scales
+
+`FP8Linear`, `FP8DownProjection`, and `FP8SwiGLU` (`FP8MLP`) extend the
+K128 FP32-scale path to forward and backward:
+
+```python
+from mxfp8 import FP8SwiGLU, bind_optimizer
+
+mlp = FP8SwiGLU(1024, 4096, 1024, device="cuda")
+optimizer = torch.optim.AdamW(mlp.parameters(), lr=1e-3)
+hook = bind_optimizer(mlp, optimizer)
+x = torch.randn(129, 1024, device="cuda", dtype=torch.bfloat16,
+                requires_grad=True)
+y = mlp(x)
+y.float().square().mean().backward()
+optimizer.step()
+```
+
+Inputs are contiguous BF16 `[M,K]`. Feature dimensions are positive multiples
+of 128; any positive M is supported. Parameters and weight gradients are FP32;
+outputs and input gradients are BF16. Master parameters use the same names as
+the MXFP8 modules: `gate_weight`, `up_weight`, and `down_proj.master_weight`.
+
+| Operation | Quantization / implementation |
+| --- | --- |
+| Activation and gradient quantization | Independent rowwise and columnwise groups of 128; column representation stored transposed, M padded with zeros |
+| Weight quantization | FP32 master → E4M3, one FP32 scale per 128×128 block; transpose and transposed scales cached without requantization |
+| Gate/up forward | Fused CUDA GEMM sharing A, with SiLU×up epilogue |
+| Down forward and dHidden | Rowwise activation/gradient × blockwise weight GEMM |
+| SiLU backward | FP32 elementwise derivative, fused with row/column quantization of dGate and dUp |
+| Gate/up dX | Fused sum of two GEMMs, rounded to BF16 once |
+| All three dW | Both operands column-quantized; rowwise scales on both sides of GEMM, FP32 output |
+
+All GEMMs use the existing TMA ring pipeline, shared-memory loader, and unit
+E8M0 `QMMA.SF` instructions, with external FP32 scaling after each K128 block.
+Quantization uses `scale = max(abs(block))/448` (1 for an all-zero block,
+clamped to the smallest normal FP32 value otherwise). Inputs should be finite.
+Gate/up projections are saved as BF16; SiLU uses those values in FP32 and
+rounds its output to BF16. Its backward similarly rounds dGate/dUp to BF16
+before quantization. The custom backward is a first-order quantized training
+approximation; double backward is unsupported.
+
+`FP8GemmPlan(..., b_scale_mode="row", dtype=torch.float32)` exposes the dW
+primitive: B's scale shape is `[N,K//128]`. It currently uses default launch
+settings (`config=0`, `sms=0`, `raster_group=8`). Fused forward/dX also use
+128×64×128 tiles and two TMA stages. These are initial configurations, not
+an autotuned FFN implementation.
+
+Caches refresh automatically after detected eager parameter updates. Use
+`bind_optimizer` for graph-captured optimizer steps: refresh operations are
+then part of the graph and cache addresses remain stable. `FusedAdamWMXFP8`
+also works; its K128 FP32-scale caches are refreshed by separate quantization
+kernels after the update. Its existing E8M0 fused epilogue remains for MXFP8.
+Warm up forward **and backward** for each shape on the capture stream before
+capture. Workspaces preserve independent live forwards and retained autograd
+graphs; returned outputs and gradients are not overwritten by later calls.
+
+Run `python benchmarks/bench_fp8_training.py` for forward and forward+backward
+CUDA Graph timings including activation/gradient quantization, excluding
+optimizer updates and weight-cache refresh.
+
 ## Execution and optimizer integration
 
 Modules own execution plans and workspaces for fixed shapes and should be
 called sequentially on a single CUDA stream. Warm up each new shape before
 CUDA Graph capture. When using a standard optimizer, call
 `mxfp8.bind_optimizer(model, optimizer)` to register FP8 weight-cache refreshes
-for all nested modules. `FusedAdamWMXFP8` updates the caches directly while
-keeping buffer addresses stable for CUDA Graph replay.
+for all nested modules. `FusedAdamWMXFP8` updates MXFP8 caches directly;
+K128 FP32-scale caches use a separate refresh. Both keep buffer addresses
+stable for CUDA Graph replay.
 
 ## Fused LM-head cross entropy
 

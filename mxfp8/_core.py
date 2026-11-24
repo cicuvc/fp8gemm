@@ -109,12 +109,24 @@ def bind_fp8_optimizer(
                     bind_parameter(parameter, weight_fp8, weight_scale)
                     bound.add(parameter_id)
 
+    # FP32-scale modules do not expose E8M0 bindings. Refresh those caches
+    # separately even when the optimizer fuses quantization for MXFP8 modules.
+    def refresh_unbound(parent):
+        if _is_fp8_sync_module(parent) and not callable(
+            getattr(parent, "fp8_parameter_bindings", None)
+        ):
+            parent.refresh_fp8_weights()
+            return
+        for child in parent.children():
+            refresh_unbound(child)
+
     def post_step_hook(optimizer, args, kwargs):
         if fused_quantization:
             for submodule in module.modules():
                 mark_synced = getattr(submodule, "mark_fp8_synced", None)
                 if callable(mark_synced):
                     mark_synced()
+            refresh_unbound(module)
         else:
             refresh_fp8_modules(module)
 

@@ -54,6 +54,10 @@ def _load_library():
         lib = ct.CDLL(str(OUTPUT / "libfp8_gemm.so"))
         lib.tk_fp8_create.argtypes = [ct.c_void_p] * 5 + [ct.c_int] * 7
         lib.tk_fp8_create.restype = ct.c_void_p
+        lib.tk_fp8_training_create.argtypes = [ct.c_void_p] * 11 + [ct.c_int] * 4
+        lib.tk_fp8_training_create.restype = ct.c_void_p
+        lib.tk_fp8_set_output.argtypes = [ct.c_void_p, ct.c_void_p]
+        lib.tk_fp8_set_output.restype = None
         lib.tk_fp8_launch.argtypes = [ct.c_void_p, ct.c_void_p]
         lib.tk_fp8_launch.restype = ct.c_int
         lib.tk_fp8_error.restype = ct.c_char_p
@@ -70,6 +74,8 @@ class FP8GemmPlan:
 
     A[M,K] and B[N,K] are contiguous float8_e4m3fn. sfA[M,K//128]
     and sfB[N//128,K//128] are contiguous FP32 dequantization multipliers.
+    With b_scale_mode="row", sfB is [N,K//128] and output must be FP32;
+    this is the weight-gradient path (default launch settings only).
     N and K must be positive multiples of 128; any positive M is supported.
     Each unscaled K128 dot product is accumulated in FP32, then multiplied
     by sfA*sfB and accumulated into a separate FP32 result. The output is
@@ -94,6 +100,7 @@ class FP8GemmPlan:
         config=0,
         sms=0,
         raster_group=8,
+        b_scale_mode="block",
     ):
         self._handle = None
         inputs = (a, b, sfA, sfB)
@@ -113,8 +120,12 @@ class FP8GemmPlan:
             raise ValueError("A and B must have dtype float8_e4m3fn")
         if sfA.dtype != torch.float32 or sfA.shape != (m, k // 128):
             raise ValueError("sfA must be FP32 [M,K//128]")
-        if sfB.dtype != torch.float32 or sfB.shape != (n // 128, k // 128):
-            raise ValueError("sfB must be FP32 [N//128,K//128]")
+        if b_scale_mode not in ("block", "row"):
+            raise ValueError("b_scale_mode must be 'block' or 'row'")
+        b_rows = n // 128 if b_scale_mode == "block" else n
+        if sfB.dtype != torch.float32 or sfB.shape != (b_rows, k // 128):
+            raise ValueError(f"sfB must be FP32 [{b_rows},K//128]")
+        self.b_scale_mode = b_scale_mode
         if not a.is_cuda or any(
             t.device != a.device or not t.is_contiguous() for t in inputs
         ):
@@ -136,6 +147,10 @@ class FP8GemmPlan:
             raise TypeError("out must be a tensor")
         if dtype is None:
             dtype = out.dtype if out is not None else torch.bfloat16
+        if b_scale_mode == "row" and (
+            dtype != torch.float32 or config != 0 or sms or raster_group != 8
+        ):
+            raise ValueError("Rowwise B scales require FP32 output and default launch settings")
         if dtype not in (torch.bfloat16, torch.float32):
             raise ValueError("Output dtype must be BF16 or FP32")
         if out is None:
@@ -163,16 +178,7 @@ class FP8GemmPlan:
         self.out = out
         self.device = a.device
         with torch.cuda.device(self.device):
-            self._handle = self._lib.tk_fp8_create(
-                *(t.data_ptr() for t in self._refs),
-                m,
-                n,
-                k,
-                config,
-                sms,
-                raster_group,
-                int(dtype == torch.float32),
-            )
+            self._handle = self._create_handle(m, n, k, config, sms, raster_group, dtype)
         if not self._handle:
             raise RuntimeError(self._lib.tk_fp8_error().decode())
         values = (ct.c_int * 8)()
@@ -193,6 +199,23 @@ class FP8GemmPlan:
             )
         )
 
+    def _create_handle(self, m, n, k, config, sms, raster_group, dtype):
+        if self.b_scale_mode == "row":
+            return self._lib.tk_fp8_training_create(
+                *(t.data_ptr() for t in self._refs), *([None] * 6), m, n, k, 0
+            )
+        return self._lib.tk_fp8_create(
+            *(t.data_ptr() for t in self._refs), m, n, k, config, sms,
+            raster_group, int(dtype == torch.float32),
+        )
+
+    def _new_output(self):
+        """Rebind direct stores without rebuilding the input TMA descriptors."""
+        self.out = torch.empty_like(self.out)
+        self._refs = (*self._refs[:4], self.out, *self._refs[5:])
+        self._lib.tk_fp8_set_output(self._handle, self.out.data_ptr())
+        return self.out
+
     def __call__(self):
         with torch.cuda.device(self.device):
             stream = torch.cuda.current_stream(self.device)
@@ -208,12 +231,30 @@ class FP8GemmPlan:
             self._handle = None
 
 
-def fp8_gemm(a, b, sfA, sfB, *, out=None, dtype=None):
+def fp8_gemm(a, b, sfA, sfB, *, out=None, dtype=None, b_scale_mode="block"):
     """Compute scaled A @ B.T; see FP8GemmPlan for layouts and semantics.
 
     For repeated calls or CUDA Graph capture, construct FP8GemmPlan once.
     """
-    return FP8GemmPlan(a, b, sfA, sfB, out=out, dtype=dtype)()
+    return FP8GemmPlan(a, b, sfA, sfB, out=out, dtype=dtype, b_scale_mode=b_scale_mode)()
+
+
+
+class _FP8DualPlan(FP8GemmPlan):
+    """Internal fused gate/up forward (1) or summed dX (2)."""
+
+    def __init__(self, a, b, sa, sb, *, a2, b2, sa2, sb2, mode, out, gate=None, up=None):
+        self._mode = mode
+        self._extra = (a2, b2, sa2, sb2, gate, up)
+        super().__init__(a, b, sa, sb, out=out)
+        self._refs += tuple(t for t in self._extra if t is not None)
+
+    def _create_handle(self, m, n, k, config, sms, raster_group, dtype):
+        return self._lib.tk_fp8_training_create(
+            *(t.data_ptr() for t in self._refs),
+            *(t.data_ptr() if t is not None else None for t in self._extra),
+            m, n, k, self._mode,
+        )
 
 
 if __name__ == "__main__":
